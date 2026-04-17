@@ -4,6 +4,14 @@ terraform {
       source  = "hashicorp/aws"
       version = "~> 5.0"
     }
+    helm = {
+      source  = "hashicorp/helm"
+      version = "~> 2.13"
+    }
+    kubernetes = {
+      source  = "hashicorp/kubernetes"
+      version = "~> 2.29"
+    }
   }
 }
 
@@ -40,4 +48,39 @@ module "ecr" {
   source       = "./modules/ecr"
   ecr_name     = "lesson-5-ecr"
   scan_on_push = true
+}
+
+data "aws_eks_cluster" "this" {
+  name = module.eks.cluster_name
+}
+
+data "aws_eks_cluster_auth" "this" {
+  name = module.eks.cluster_name
+}
+
+# Jenkins встановлюємо Helm-ом у EKS
+module "jenkins" {
+  source = "./modules/jenkins"
+
+  cluster_name               = module.eks.cluster_name
+  kubernetes_host            = data.aws_eks_cluster.this.endpoint
+  kubernetes_cluster_ca_cert = base64decode(data.aws_eks_cluster.this.certificate_authority[0].data)
+  kubernetes_token           = data.aws_eks_cluster_auth.this.token
+
+  ecr_repository_url = module.ecr.repository_url
+  aws_region         = "us-west-2"
+}
+
+# Argo CD + Application для GitOps синхронізації Helm chart
+module "argo_cd" {
+  source = "./modules/argo_cd"
+
+  cluster_name               = module.eks.cluster_name
+  kubernetes_host            = data.aws_eks_cluster.this.endpoint
+  kubernetes_cluster_ca_cert = base64decode(data.aws_eks_cluster.this.certificate_authority[0].data)
+  kubernetes_token           = data.aws_eks_cluster_auth.this.token
+
+  gitops_repo_url   = "https://github.com/Notalama/devops-cicd.git"
+  app_target_path   = "lesson-7/charts/django-app"
+  app_target_branch = "main"
 }

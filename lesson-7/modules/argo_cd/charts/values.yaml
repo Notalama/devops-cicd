@@ -1,0 +1,22 @@
+repositories:
+  - name: gitops-repo
+    type: git
+    url: "${gitops_repo_url}"
+
+applications:
+  - name: django-app
+    project: default
+    source:
+      repoURL: "${gitops_repo_url}"
+      targetRevision: "${app_target_branch}"
+      path: "${app_target_path}"
+      helm: {}
+    destination:
+      server: https://kubernetes.default.svc
+      namespace: default
+    syncPolicy:
+      automated:
+        prune: true
+        selfHeal: true
+      syncOptions:
+        - CreateNamespace=true
