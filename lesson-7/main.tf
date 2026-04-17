@@ -28,6 +28,13 @@ module "vpc" {
   vpc_name           = "lesson-5-vpc"
 }
 
+# Підключаємо модуль EKS
+module "eks" {
+  source     = "./modules/eks"
+  vpc_id     = module.vpc.vpc_id
+  subnet_ids = module.vpc.private_subnet_ids # Використовуємо приватні підмережі для безпеки
+}
+
 # Підключаємо модуль ECR
 module "ecr" {
   source       = "./modules/ecr"

@@ -6,31 +6,26 @@ resource "aws_ecr_repository" "this" {
     scan_on_push = var.scan_on_push
   }
 
-  tags = {
-    Name = var.ecr_name
-  }
+  # Життєвий цикл: видаляти старі образи (залишати останні 5), щоб не платити зайвого
+  force_delete = true 
 }
 
-# Політика життєвого циклу (опціонально, але корисно): зберігаємо лише останні 10 образів
-resource "aws_ecr_lifecycle_policy" "this" {
+# Політика життєвого циклу для економії місця (Free Tier дає 500МБ/міс)
+resource "aws_ecr_lifecycle_policy" "cleanup" {
   repository = aws_ecr_repository.this.name
 
-  policy = <<EOF
-{
-    "rules": [
-        {
-            "rulePriority": 1,
-            "description": "Keep last 10 images",
-            "selection": {
-                "tagStatus": "any",
-                "countType": "imageCountMoreThan",
-                "countNumber": 10
-            },
-            "action": {
-                "type": "expire"
-            }
-        }
-    ]
-}
-EOF
+  policy = jsonencode({
+    rules = [{
+      rulePriority = 1
+      description  = "Keep last 5 images"
+      selection = {
+        tagStatus     = "any"
+        countType     = "imageCountMoreThan"
+        countNumber   = 5
+      }
+      action = {
+        type = "expire"
+      }
+    }]
+  })
 }
