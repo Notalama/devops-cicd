@@ -71,6 +71,67 @@ module "jenkins" {
   aws_region         = "us-west-2"
 }
 
+# ─── RDS Module ───────────────────────────────────────────────────────────────
+# Приклад 1: Звичайна RDS PostgreSQL instance
+module "rds_postgres" {
+  source = "./modules/rds"
+
+  identifier      = "lesson-7-postgres"
+  use_aurora      = false
+  engine          = "postgres"
+  engine_version  = "15.8"
+  instance_class  = "db.t3.medium"
+
+  allocated_storage     = 20
+  max_allocated_storage = 100
+  storage_type          = "gp3"
+  multi_az              = false
+
+  database_name   = "appdb"
+  master_username = "dbadmin"
+  master_password = var.db_master_password
+
+  vpc_id     = module.vpc.vpc_id
+  subnet_ids = module.vpc.private_subnet_ids
+
+  # allowed_security_group_ids = [<eks_node_sg_id>]  # передайте SG node-групи EKS
+  allowed_cidr_blocks = [module.vpc.vpc_cidr_block]
+
+  backup_retention_period = 7
+  deletion_protection     = false  # true для production
+  skip_final_snapshot     = true   # false для production
+
+  tags = { Environment = "dev", Project = "lesson-7" }
+}
+
+# Приклад 2: Aurora PostgreSQL Cluster
+module "rds_aurora" {
+  source = "./modules/rds"
+
+  identifier      = "lesson-7-aurora"
+  use_aurora      = true
+  engine          = "aurora-postgresql"
+  engine_version  = "15.4"
+  instance_class  = "db.t3.medium"
+  replica_count   = 2
+
+  database_name   = "appdb"
+  master_username = "dbadmin"
+  master_password = var.db_master_password
+
+  vpc_id     = module.vpc.vpc_id
+  subnet_ids = module.vpc.private_subnet_ids
+
+  # allowed_security_group_ids = [<eks_node_sg_id>]  # передайте SG node-групи EKS
+  allowed_cidr_blocks = [module.vpc.vpc_cidr_block]
+
+  backup_retention_period = 7
+  deletion_protection     = false  # true для production
+  skip_final_snapshot     = true   # false для production
+
+  tags = { Environment = "dev", Project = "lesson-7" }
+}
+
 # Argo CD + Application для GitOps синхронізації Helm chart
 module "argo_cd" {
   source = "./modules/argo_cd"
