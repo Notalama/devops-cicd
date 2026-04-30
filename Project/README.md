@@ -1,39 +1,161 @@
-# Lesson 8-9: Jenkins + Terraform + ECR + Helm + Argo CD
+# Фінальний проєкт — Django CI/CD на AWS
 
-Цей проєкт реалізує повний CI/CD конвеєр для Django застосунку без ручного деплою:
+Повний CI/CD конвеєр: Django → Docker → ECR → EKS → RDS, автоматизований через Jenkins + Argo CD.
 
-1. Jenkins збирає Docker image;
-2. Jenkins пушить image в Amazon ECR;
-3. Jenkins оновлює `image.tag` у `values.yaml` GitOps-репозиторію;
-4. Argo CD автоматично синхронізує зміни в EKS кластер.
-
-## Що створює Terraform
-
-- `modules/s3-backend`: S3 + lock-файл backend для Terraform state.
-- `modules/vpc`: VPC, підмережі, маршрутизація.
-- `modules/eks`: EKS кластер + node group.
-- `modules/ecr`: ECR репозиторій для Django image.
-- `modules/jenkins`: Jenkins Helm release + Kubernetes agent для Kaniko/Git.
-- `modules/argo_cd`: Argo CD Helm release + Argo CD Application (GitOps).
-
-## Як застосувати Terraform
-
-> Перший запуск робіть локально (коли `s3-backend` ще не існує), далі мігруйте state в S3 backend.
-
-```bash
-terraform init
-terraform fmt -recursive
-terraform plan
-terraform apply
+```
+Developer push → Jenkins build → Kaniko → ECR → GitOps values.yaml → Argo CD → EKS
+                                                                                    ↕
+                                                                                   RDS
 ```
 
-Після створення S3 backend (якщо робили локально) виконайте:
+## Структура проєкту
+
+```
+Project/
+├── main.tf                          # Підключення всіх модулів
+├── backend.tf                       # S3 backend для Terraform state
+├── variables.tf                     # Вхідні змінні (DB пароль тощо)
+├── outputs.tf                       # Виводи (endpoints, URLs)
+├── Jenkinsfile                      # Pipeline для збірки (кореневий)
+│
+├── modules/
+│   ├── s3-backend/                  # S3 + DynamoDB для Terraform state
+│   ├── vpc/                         # VPC, підмережі, IGW, NAT, маршрути
+│   ├── eks/                         # EKS кластер + node group + EBS CSI driver
+│   ├── ecr/                         # ECR репозиторій для Docker образів
+│   ├── rds/                         # RDS instance або Aurora cluster
+│   ├── jenkins/                     # Jenkins (Helm release в EKS)
+│   └── argo_cd/                     # Argo CD (Helm release в EKS)
+│
+├── charts/
+│   └── django-app/                  # Helm chart для деплою Django
+│       ├── Chart.yaml
+│       ├── values.yaml              # image.tag оновлюється Jenkins'ом
+│       └── templates/
+│           ├── deployment.yaml
+│           ├── service.yaml
+│           ├── configmap.yaml
+│           └── hpa.yaml
+│
+└── Django/                          # Вихідний код застосунку
+    ├── Dockerfile                   # Multi-stage production build
+    ├── Jenkinsfile                  # Pipeline для Django (context-aware)
+    ├── docker-compose.yaml          # Локальна розробка з PostgreSQL
+    └── app/
+        ├── manage.py
+        ├── requirements.txt
+        ├── config/
+        │   ├── settings.py
+        │   ├── urls.py
+        │   └── wsgi.py
+        └── api/
+            ├── views.py
+            └── urls.py
+```
+
+---
+
+## Крок 1 — Передумови
+
+### 1.1 Локальні інструменти
+
+```bash
+# Перевірте наявність:
+aws --version           # >= 2.x
+terraform version       # >= 1.7
+kubectl version --client
+helm version
+docker --version
+git --version
+```
+
+### 1.2 AWS IAM — необхідні права
+
+Обліковий запис (або роль), з якого запускається Terraform, повинен мати права на:
+
+| Сервіс | Дії |
+|---|---|
+| IAM | CreateRole, AttachRolePolicy, CreateOpenIDConnectProvider |
+| VPC | FullAccess |
+| EKS | FullAccess |
+| ECR | FullAccess |
+| RDS | FullAccess |
+| S3 | FullAccess |
+| DynamoDB | FullAccess |
+| ELB | FullAccess (для Jenkins/ArgoCD LoadBalancer) |
+
+### 1.3 Налаштування AWS CLI
+
+```bash
+aws configure
+# AWS Access Key ID:     <ваш ключ>
+# AWS Secret Access Key: <ваш секрет>
+# Default region name:   us-west-2
+# Default output format: json
+```
+
+Перевірка:
+
+```bash
+aws sts get-caller-identity
+```
+
+---
+
+## Крок 2 — Підготовка Terraform State (перший запуск)
+
+> S3-бакет та DynamoDB-таблиця для зберігання state ще не існують — потрібен локальний перший запуск.
+
+### 2.1 Тимчасово вимкніть S3 backend
+
+Закоментуйте вміст `backend.tf`:
+
+```hcl
+# terraform {
+#   backend "s3" { ... }
+# }
+```
+
+### 2.2 Встановіть пароль БД через змінну середовища
+
+```bash
+export TF_VAR_db_master_password="YourStr0ngPassword!"
+```
+
+### 2.3 Ініціалізуйте та застосуйте лише модуль s3-backend
+
+```bash
+cd Project/
+terraform init
+terraform apply -target=module.s3_backend
+```
+
+### 2.4 Поверніть backend.tf та мігруйте state в S3
+
+Розкоментуйте `backend.tf`, потім:
 
 ```bash
 terraform init -migrate-state
+# Підтвердіть перенесення: yes
 ```
 
-### Корисні outputs
+---
+
+## Крок 3 — Розгортання всієї інфраструктури
+
+```bash
+# Встановіть пароль (якщо нова сесія)
+export TF_VAR_db_master_password="YourStr0ngPassword!"
+
+terraform fmt -recursive
+terraform validate
+terraform plan -out=tfplan
+terraform apply tfplan
+```
+
+> Орієнтовний час: 20–35 хв (EKS ~15 хв, RDS ~10 хв).
+
+### 3.1 Перевірте виводи
 
 ```bash
 terraform output eks_cluster_name
@@ -42,74 +164,244 @@ terraform output jenkins_namespace
 terraform output argo_cd_namespace
 terraform output rds_postgres_endpoint
 terraform output aurora_writer_endpoint
-terraform output aurora_reader_endpoint
 ```
 
-## Як перевірити Jenkins job
-
-1. Відкрийте Jenkins:
-   - `kubectl get svc -n jenkins`
-   - перейдіть на `EXTERNAL-IP` сервісу.
-2. Створіть Pipeline job, який використовує `lesson-7/Jenkinsfile`.
-3. Додайте credentials:
-   - `aws-jenkins-creds` (AWS Access Key/Secret);
-   - `git-token` (username + personal access token для GitHub).
-4. Встановіть у `Jenkinsfile` або через параметри job:
-   - `ECR_REPOSITORY_URL`;
-   - `GITOPS_REPO_URL`;
-   - `GITOPS_VALUES_FILE`.
-5. Запустіть job і перевірте:
-   - у логах є пуш образу в ECR;
-   - у GitOps repo оновився `image.tag` в `values.yaml`.
-
-## Як побачити результат в Argo CD
-
-1. Перевірте Argo CD сервіси:
+### 3.2 Налаштуйте kubectl
 
 ```bash
-kubectl get svc -n argocd
+aws eks update-kubeconfig \
+  --region us-west-2 \
+  --name $(terraform output -raw eks_cluster_name)
+
+kubectl get nodes        # усі вузли мають бути Ready
+kubectl get pods -A      # перевірте системні поди
 ```
-
-2. Отримайте admin пароль:
-
-```bash
-kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d
-```
-
-3. Увійдіть в Argo CD UI (`admin` + пароль).
-4. Відкрийте `Application` `django-app`:
-   - статус має стати `Synced` / `Healthy`;
-   - після нового Jenkins build Argo CD автоматично підтягує новий тег з Git.
-
-## Важливо щодо вартості AWS
-
-Після перевірки обов'язково видаляйте інфраструктуру:
-
-```bash
-terraform destroy
-```
-
-Пам'ятайте: після `terraform destroy` також видаляються S3 backend ресурси (bucket/lock), тому для наступного циклу їх доведеться створювати знову.
 
 ---
 
-# Модуль `rds`
+## Крок 4 — Налаштування values.yaml для Django
+
+Замініть `DATABASE_URL` на реальний RDS endpoint:
+
+```bash
+RDS_HOST=$(terraform output -raw rds_postgres_endpoint)
+```
+
+Відредагуйте `Project/charts/django-app/values.yaml`:
+
+```yaml
+env:
+  DATABASE_URL: "postgres://dbadmin:YourStr0ngPassword!@<RDS_HOST>:5432/appdb"
+  ALLOWED_HOSTS: "*"
+  DEBUG: "False"
+
+image:
+  repository: <ECR_REPOSITORY_URL>  # з terraform output ecr_repository_url
+  tag: "latest"
+```
+
+Збережіть та закомітьте зміни в Git — Argo CD підхопить їх автоматично.
+
+---
+
+## Крок 5 — Налаштування Jenkins
+
+### 5.1 Отримайте URL та пароль Jenkins
+
+```bash
+kubectl get svc -n jenkins
+# Скопіюйте EXTERNAL-IP
+
+kubectl get secret --namespace jenkins jenkins \
+  -o jsonpath="{.data.jenkins-admin-password}" | base64 -d
+```
+
+### 5.2 Додайте Credentials у Jenkins UI
+
+Перейдіть: **Manage Jenkins → Credentials → System → Global credentials**
+
+| ID | Тип | Значення |
+|---|---|---|
+| `aws-jenkins-creds` | AWS Credentials | AWS Access Key ID + Secret |
+| `git-token` | Username with password | GitHub username + PAT |
+
+> GitHub PAT потрібні права: `repo` (read/write).
+
+### 5.3 Створіть Pipeline job
+
+1. **New Item → Pipeline**
+2. **Pipeline → Definition**: Pipeline script from SCM
+3. **SCM**: Git → `https://github.com/Notalama/devops-cicd.git`
+4. **Script Path**: `Project/Django/Jenkinsfile`
+5. **Build Triggers**: Poll SCM або GitHub webhook
+
+### 5.4 Встановіть ECR URL як environment variable
+
+У **Pipeline job → Configure → Build Environment**:
+
+```
+ECR_REPOSITORY_URL = <значення з terraform output ecr_repository_url>
+```
+
+### 5.5 Запустіть перший build
+
+**Build Now** — pipeline виконає:
+1. `Checkout` — клонує репозиторій
+2. `Build and Push to ECR` — Kaniko збирає образ та пушить з тегом BUILD_NUMBER
+3. `Update Helm values` — оновлює `image.tag` в `values.yaml` та пушить в Git
+
+---
+
+## Крок 6 — Перевірка Argo CD
+
+### 6.1 Отримайте URL та пароль Argo CD
+
+```bash
+kubectl get svc -n argocd
+# EXTERNAL-IP → відкрийте в браузері
+
+kubectl -n argocd get secret argocd-initial-admin-secret \
+  -o jsonpath="{.data.password}" | base64 -d
+```
+
+Логін: `admin` + пароль вище.
+
+### 6.2 Перевірте Application
+
+У Argo CD UI відкрийте `django-app`:
+- **Status**: `Synced` + `Healthy`
+- **Images**: тег відповідає останньому BUILD_NUMBER Jenkins
+
+Якщо статус `OutOfSync`:
+
+```bash
+argocd app sync django-app   # примусова синхронізація
+```
+
+### 6.3 Перевірте деплой Django
+
+```bash
+kubectl get pods -n django-app
+kubectl get svc -n django-app
+
+# Отримайте зовнішній IP
+DJANGO_IP=$(kubectl get svc django-app -n django-app \
+  -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+
+curl http://${DJANGO_IP}/healthz/
+# {"status": "ok"}
+
+curl http://${DJANGO_IP}/api/items/
+# {"items": [...]}
+```
+
+---
+
+## Крок 7 — Локальна розробка Django
+
+```bash
+cd Project/Django/
+
+# Запуск з PostgreSQL у Docker
+docker compose up -d
+
+# Застосуйте міграції (при першому запуску)
+docker compose exec web python manage.py migrate
+docker compose exec web python manage.py createsuperuser
+
+# Відкрийте: http://localhost:8000/healthz/
+```
+
+---
+
+## Крок 8 — Повний CI/CD цикл (перевірка)
+
+```
+1. Змініть код у Django/app/api/views.py
+2. git add . && git commit -m "feat: update api" && git push origin main
+3. Jenkins автоматично запускає build (або запустіть вручну)
+4. Kaniko → збирає новий образ → пушить в ECR з тегом BUILD_NUMBER
+5. Jenkins → оновлює image.tag у Project/charts/django-app/values.yaml
+6. Argo CD → помічає зміну в Git → синхронізує → оновлює поди в EKS
+7. Нова версія застосунку доступна за зовнішнім IP
+```
+
+---
+
+## Корисні команди
+
+### Terraform
+
+```bash
+terraform output -json                        # всі виводи у JSON
+terraform state list                          # список ресурсів у state
+terraform state show module.rds_postgres.aws_db_instance.this[0]
+```
+
+### Kubernetes
+
+```bash
+kubectl get pods -A                           # всі поди
+kubectl logs -n jenkins <pod-name> -f         # логи Jenkins
+kubectl describe pod <pod> -n <ns>            # деталі поду
+kubectl get events -n django-app --sort-by='.lastTimestamp'
+```
+
+### ECR
+
+```bash
+# Ручний логін та пуш (для тестування)
+aws ecr get-login-password --region us-west-2 | \
+  docker login --username AWS \
+  --password-stdin $(terraform output -raw ecr_repository_url | cut -d/ -f1)
+
+docker build -t django-app Project/Django/
+docker tag django-app:latest $(terraform output -raw ecr_repository_url):manual
+docker push $(terraform output -raw ecr_repository_url):manual
+```
+
+### RDS
+
+```bash
+# Підключення до PostgreSQL через kubectl port-forward
+kubectl run psql-client --rm -it --image=postgres:15-alpine \
+  --env="PGPASSWORD=YourStr0ngPassword!" -- \
+  psql -h $(terraform output -raw rds_postgres_endpoint) \
+       -U dbadmin -d appdb
+```
+
+---
+
+## Видалення інфраструктури
+
+```bash
+export TF_VAR_db_master_password="YourStr0ngPassword!"
+terraform destroy
+```
+
+> Після `destroy` S3-бакет та DynamoDB-таблиця також видаляються. При наступному розгортанні починайте з Кроку 2.
+
+---
+
+## Усунення типових помилок
+
+| Проблема | Вирішення |
+|---|---|
+| `Error: Backend S3 bucket not found` | Виконайте Крок 2 (перший запуск без backend) |
+| `EKS nodes NotReady` | `kubectl describe node <name>` — перевірте taints/events |
+| `Kaniko: unauthorized` | Перевірте credentials `aws-jenkins-creds` у Jenkins |
+| `Argo CD: ComparisonError` | Перевірте, чи `app_target_path` збігається з реальним шляхом в Git |
+| `RDS: timeout` | Перевірте Security Group — `allowed_cidr_blocks` має включати VPC CIDR |
+| `TF_VAR_db_master_password not set` | `export TF_VAR_db_master_password="..."` перед `terraform apply` |
+
+---
+
+## Модуль `rds`
 
 Універсальний модуль для розгортання реляційної бази даних на AWS.
 Підтримує **звичайну RDS instance** (PostgreSQL / MySQL) та **Aurora Cluster** — вибір здійснюється прапором `use_aurora`.
 
-## Структура модуля
-
-```
-modules/rds/
-├── variables.tf   # Всі вхідні змінні
-├── shared.tf      # DB Subnet Group, Security Group, Parameter Groups
-├── rds.tf         # aws_db_instance (use_aurora = false)
-├── aurora.tf      # aws_rds_cluster + aws_rds_cluster_instance (use_aurora = true)
-└── outputs.tf     # Виводи (endpoints, IDs, SG тощо)
-```
-
-## Що створює модуль `rds`
+### Що створює модуль `rds`
 
 | Ресурс | Умова |
 |---|---|
@@ -122,9 +414,9 @@ modules/rds/
 | `aws_rds_cluster_instance` × N | `use_aurora = true`, N = `replica_count` |
 | `aws_iam_role` + policy | Завжди (Enhanced Monitoring) |
 
-## Приклади використання
+### Приклади використання
 
-### 1. Звичайна RDS — PostgreSQL
+#### Звичайна RDS — PostgreSQL
 
 ```hcl
 module "rds" {
@@ -139,7 +431,7 @@ module "rds" {
   allocated_storage     = 20
   max_allocated_storage = 100
   storage_type          = "gp3"
-  multi_az              = true       # HA для production
+  multi_az              = true
 
   database_name   = "appdb"
   master_username = "dbadmin"
@@ -148,59 +440,24 @@ module "rds" {
   vpc_id     = module.vpc.vpc_id
   subnet_ids = module.vpc.private_subnet_ids
 
-  allowed_security_group_ids = [module.eks.node_security_group_id]
-
   backup_retention_period = 14
   deletion_protection     = true
   skip_final_snapshot     = false
-
-  tags = {
-    Environment = "production"
-    Project     = "my-app"
-  }
 }
 ```
 
-### 2. Звичайна RDS — MySQL
+#### Aurora PostgreSQL Cluster
 
 ```hcl
-module "rds_mysql" {
+module "rds_aurora" {
   source = "./modules/rds"
 
-  identifier      = "my-app-mysql"
-  use_aurora      = false
-  engine          = "mysql"
-  engine_version  = "8.0.40"
-  instance_class  = "db.t3.large"
-
-  allocated_storage     = 50
-  max_allocated_storage = 200
-  storage_type          = "gp3"
-  multi_az              = true
-
-  database_name   = "appdb"
-  master_username = "admin"
-  master_password = var.db_master_password
-
-  vpc_id     = module.vpc.vpc_id
-  subnet_ids = module.vpc.private_subnet_ids
-
-  allowed_cidr_blocks = ["10.0.0.0/16"]
-}
-```
-
-### 3. Aurora PostgreSQL Cluster
-
-```hcl
-module "rds_aurora_pg" {
-  source = "./modules/rds"
-
-  identifier      = "my-app-aurora-pg"
+  identifier      = "my-app-aurora"
   use_aurora      = true
   engine          = "aurora-postgresql"
   engine_version  = "15.4"
   instance_class  = "db.r6g.large"
-  replica_count   = 2               # 1 writer + 1 reader
+  replica_count   = 2
 
   database_name   = "appdb"
   master_username = "dbadmin"
@@ -208,43 +465,10 @@ module "rds_aurora_pg" {
 
   vpc_id     = module.vpc.vpc_id
   subnet_ids = module.vpc.private_subnet_ids
-
-  allowed_security_group_ids = [module.eks.node_security_group_id]
-
-  backup_retention_period = 14
-  deletion_protection     = true
-  skip_final_snapshot     = false
-
-  tags = {
-    Environment = "production"
-    Project     = "my-app"
-  }
 }
 ```
 
-### 4. Aurora MySQL Cluster
-
-```hcl
-module "rds_aurora_mysql" {
-  source = "./modules/rds"
-
-  identifier      = "my-app-aurora-mysql"
-  use_aurora      = true
-  engine          = "aurora-mysql"
-  engine_version  = "8.0.mysql_aurora.3.06.0"
-  instance_class  = "db.r6g.large"
-  replica_count   = 3
-
-  database_name   = "appdb"
-  master_username = "admin"
-  master_password = var.db_master_password
-
-  vpc_id     = module.vpc.vpc_id
-  subnet_ids = module.vpc.private_subnet_ids
-}
-```
-
-## Виводи модуля `rds`
+### Виводи модуля `rds`
 
 | Output | Опис |
 |---|---|
@@ -260,152 +484,30 @@ module "rds_aurora_mysql" {
 | `aurora_cluster_id` | (Aurora) ID кластера |
 | `aurora_instance_ids` | (Aurora) List ID усіх instances |
 
-## Опис змінних
-
-### Загальні
+### Опис змінних модуля `rds`
 
 | Змінна | Тип | За замовч. | Обов'язкова | Опис |
 |---|---|---|---|---|
 | `identifier` | `string` | — | ✅ | Унікальний префікс для всіх ресурсів |
 | `use_aurora` | `bool` | `false` | — | `true` → Aurora Cluster, `false` → RDS Instance |
+| `engine` | `string` | `"postgres"` | — | `postgres`, `mysql`, `aurora-postgresql`, `aurora-mysql` |
+| `engine_version` | `string` | `"15.8"` | — | Версія движка |
+| `instance_class` | `string` | `"db.t3.medium"` | — | Клас інстансу |
+| `allocated_storage` | `number` | `20` | — | (RDS) Початковий розмір ГБ |
+| `max_allocated_storage` | `number` | `100` | — | (RDS) Макс. розмір autoscaling ГБ |
+| `storage_type` | `string` | `"gp3"` | — | (RDS) Тип EBS: gp2/gp3/io1/io2 |
+| `multi_az` | `bool` | `false` | — | (RDS) Увімкнути Multi-AZ |
+| `replica_count` | `number` | `1` | — | (Aurora) Кількість instances |
+| `database_name` | `string` | — | ✅ | Назва початкової БД |
+| `master_username` | `string` | — | ✅ | Master username |
+| `master_password` | `string` | — | ✅ | Master password (sensitive) |
+| `vpc_id` | `string` | — | ✅ | ID VPC |
+| `subnet_ids` | `list(string)` | — | ✅ | Мінімум 2 підмережі в різних AZ |
+| `allowed_cidr_blocks` | `list(string)` | `[]` | — | CIDR з доступом до БД |
+| `allowed_security_group_ids` | `list(string)` | `[]` | — | SG з доступом до БД |
+| `backup_retention_period` | `number` | `7` | — | Дні зберігання backup |
+| `deletion_protection` | `bool` | `true` | — | Захист від видалення |
+| `skip_final_snapshot` | `bool` | `false` | — | Пропустити фінальний snapshot |
+| `storage_encrypted` | `bool` | `true` | — | Шифрувати storage |
+| `kms_key_id` | `string` | `null` | — | ARN KMS-ключа |
 | `tags` | `map(string)` | `{}` | — | Теги для всіх ресурсів |
-
-### Engine
-
-| Змінна | Тип | За замовч. | Опис |
-|---|---|---|---|
-| `engine` | `string` | `"postgres"` | `postgres`, `mysql`, `aurora-postgresql`, `aurora-mysql` |
-| `engine_version` | `string` | `"15.8"` | Версія движка |
-| `parameter_group_family` | `string` | `null` | Сімейство PG (обчислюється автоматично) |
-
-**Підтримувані комбінації `engine` / `engine_version`:**
-
-| `use_aurora` | `engine` | `engine_version` приклад | `parameter_group_family` |
-|---|---|---|---|
-| `false` | `postgres` | `15.8`, `14.13` | `postgres15`, `postgres14` |
-| `false` | `mysql` | `8.0.40`, `5.7.44` | `mysql8.0`, `mysql5.7` |
-| `true` | `aurora-postgresql` | `15.4`, `14.9` | `aurora-postgresql15` |
-| `true` | `aurora-mysql` | `8.0.mysql_aurora.3.06.0` | `aurora-mysql8.0` |
-
-### Мережа
-
-| Змінна | Тип | За замовч. | Опис |
-|---|---|---|---|
-| `vpc_id` | `string` | — | ID VPC |
-| `subnet_ids` | `list(string)` | — | Мінімум 2 приватні підмережі в різних AZ |
-| `port` | `number` | `null` | Порт БД (auto: 5432/3306) |
-| `allowed_cidr_blocks` | `list(string)` | `[]` | CIDR, яким дозволено доступ |
-| `allowed_security_group_ids` | `list(string)` | `[]` | SG-ідентифікатори з доступом |
-
-### Ресурси
-
-| Змінна | Тип | За замовч. | Опис |
-|---|---|---|---|
-| `instance_class` | `string` | `"db.t3.medium"` | Клас інстансу |
-| `allocated_storage` | `number` | `20` | (RDS) Початковий розмір ГБ |
-| `max_allocated_storage` | `number` | `100` | (RDS) Макс. розмір autoscaling ГБ |
-| `storage_type` | `string` | `"gp3"` | (RDS) Тип EBS: gp2/gp3/io1/io2 |
-| `iops` | `number` | `null` | (RDS) IOPS для io1/io2/gp3 |
-| `multi_az` | `bool` | `false` | (RDS) Увімкнути Multi-AZ |
-| `replica_count` | `number` | `1` | (Aurora) Кількість instances у кластері |
-
-### Облікові дані
-
-| Змінна | Тип | Опис |
-|---|---|---|
-| `database_name` | `string` | Назва початкової БД |
-| `master_username` | `string` | Master username |
-| `master_password` | `string` (sensitive) | Master password — передавати через `TF_VAR_db_master_password` або Secrets Manager |
-
-### Backup та Maintenance
-
-| Змінна | Тип | За замовч. | Опис |
-|---|---|---|---|
-| `backup_retention_period` | `number` | `7` | Дні зберігання backup (0 = вимкнути) |
-| `preferred_backup_window` | `string` | `"03:00-04:00"` | Вікно backup (UTC) |
-| `preferred_maintenance_window` | `string` | `"Mon:04:00-Mon:05:00"` | Вікно обслуговування (UTC) |
-| `auto_minor_version_upgrade` | `bool` | `true` | Автооновлення мінорних версій |
-| `apply_immediately` | `bool` | `false` | Негайне застосування змін |
-
-### Шифрування та захист
-
-| Змінна | Тип | За замовч. | Опис |
-|---|---|---|---|
-| `storage_encrypted` | `bool` | `true` | Шифрувати EBS/Aurora storage |
-| `kms_key_id` | `string` | `null` | ARN KMS-ключа (null = aws/rds managed) |
-| `deletion_protection` | `bool` | `true` | Захист від видалення |
-| `skip_final_snapshot` | `bool` | `false` | Пропустити фінальний snapshot |
-| `final_snapshot_identifier_prefix` | `string` | `"final"` | Префікс для назви snapshot |
-
-## Як змінити тип БД, engine або клас інстансу
-
-### Зміна engine та версії
-
-```hcl
-# PostgreSQL 14
-engine         = "postgres"
-engine_version = "14.13"
-# parameter_group_family автоматично стане "postgres14"
-
-# MySQL 8.0
-engine         = "mysql"
-engine_version = "8.0.40"
-# parameter_group_family автоматично стане "mysql8.0"
-```
-
-> ⚠️ Зміна `engine` на існуючому ресурсі призводить до **recreate**. Плануйте наперед.
-
-### Зміна класу інстансу
-
-```hcl
-instance_class = "db.r6g.2xlarge"
-```
-
-Для RDS — зміна відбувається під час maintenance window (або негайно якщо `apply_immediately = true`).
-Для Aurora — кожен instance оновлюється по черзі без downtime.
-
-### Перемикання між RDS та Aurora
-
-```hcl
-# Було: use_aurora = false
-# Стало: use_aurora = true → Terraform знищить RDS і створить Aurora Cluster
-use_aurora = true
-engine     = "aurora-postgresql"  # engine також потрібно змінити!
-```
-
-> ⚠️ Міграція між RDS та Aurora потребує відновлення з snapshot або реплікації даних.
-> Рекомендований шлях: зробити snapshot RDS → відновити в Aurora → переключити endpoint.
-
-### Масштабування Aurora
-
-```hcl
-replica_count = 3  # 1 writer + 2 readers
-```
-
-### Multi-AZ для RDS
-
-```hcl
-multi_az = true  # автоматичний failover на standby в іншій AZ
-```
-
-## Безпека паролів
-
-Не зберігайте пароль у коді. Передавайте через змінну середовища:
-
-```bash
-export TF_VAR_db_master_password="$(aws secretsmanager get-secret-value \
-  --secret-id my-app/db/password --query SecretString --output text | jq -r .password)"
-terraform apply
-```
-
-Або через `aws_secretsmanager_secret_version` безпосередньо в Terraform:
-
-```hcl
-data "aws_secretsmanager_secret_version" "db" {
-  secret_id = "my-app/db/password"
-}
-
-module "rds" {
-  master_password = jsondecode(data.aws_secretsmanager_secret_version.db.secret_string)["password"]
-}
-```
