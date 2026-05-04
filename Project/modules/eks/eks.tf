@@ -54,7 +54,7 @@ resource "aws_iam_role_policy_attachment" "nodes_amazon_eks_cni_policy" {
 }
 
 resource "aws_iam_role_policy_attachment" "nodes_amazon_ecr_readonly" {
-  policy_arn = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryPowerUser"
   role       = aws_iam_role.nodes_role.name
 }
 
