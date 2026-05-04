@@ -48,7 +48,7 @@ variable "parameter_group_family" {
   type        = string
   default     = null
   description = <<-EOT
-    Сімейство parameter group. Якщо null — обчислюється автоматично з engine та engine_version.
+    Сімейство parameter group. Якщо null - обчислюється автоматично з engine та engine_version.
     Приклади: postgres15, postgres14, mysql8.0, aurora-postgresql15, aurora-mysql8.0.
   EOT
 }
@@ -85,7 +85,7 @@ variable "subnet_ids" {
 variable "port" {
   type        = number
   default     = null
-  description = "Порт БД. Якщо null — використовується 5432 для PostgreSQL та 3306 для MySQL."
+  description = "Порт БД. Якщо null - використовується 5432 для PostgreSQL та 3306 для MySQL."
 }
 
 variable "allowed_cidr_blocks" {
@@ -117,7 +117,7 @@ variable "master_username" {
 variable "master_password" {
   type        = string
   sensitive   = true
-  description = "Пароль головного користувача. Зберігайте в AWS Secrets Manager або Vault — не в коді."
+  description = "Пароль головного користувача. Зберігайте в AWS Secrets Manager або Vault - не в коді."
 }
 
 # ─────────────────────────────────────────────
@@ -133,7 +133,7 @@ variable "allocated_storage" {
 variable "max_allocated_storage" {
   type        = number
   default     = 100
-  description = "(Тільки RDS) Максимальний розмір autoscaling-сховища в ГБ. 0 — вимкнути autoscaling."
+  description = "(Тільки RDS) Максимальний розмір autoscaling-сховища в ГБ. 0 - вимкнути autoscaling."
 }
 
 variable "storage_type" {
@@ -176,7 +176,7 @@ variable "replica_count" {
 variable "backup_retention_period" {
   type        = number
   default     = 7
-  description = "Кількість днів зберігання автоматичних бекапів (0 — вимкнути)."
+  description = "Кількість днів зберігання автоматичних бекапів (0 - вимкнути)."
 }
 
 variable "preferred_backup_window" {
@@ -216,7 +216,7 @@ variable "storage_encrypted" {
 variable "kms_key_id" {
   type        = string
   default     = null
-  description = "ARN власного KMS-ключа для шифрування. Якщо null — використовується aws/rds managed key."
+  description = "ARN власного KMS-ключа для шифрування. Якщо null - використовується aws/rds managed key."
 }
 
 # ─────────────────────────────────────────────
@@ -232,7 +232,7 @@ variable "deletion_protection" {
 variable "skip_final_snapshot" {
   type        = bool
   default     = false
-  description = "Пропустити фінальний snapshot при видаленні. false (рекомендовано для prod) — знімок буде зроблено."
+  description = "Пропустити фінальний snapshot при видаленні. false (рекомендовано для prod) - знімок буде зроблено."
 }
 
 variable "final_snapshot_identifier_prefix" {

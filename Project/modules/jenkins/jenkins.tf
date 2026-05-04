@@ -11,7 +11,7 @@ resource "helm_release" "jenkins" {
   chart            = "jenkins"
   version          = var.chart_version
   create_namespace = false
-  timeout          = 900
+  timeout          = 300
 
   values = [
     templatefile("${path.module}/values.yaml", {

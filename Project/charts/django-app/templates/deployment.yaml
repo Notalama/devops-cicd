@@ -20,6 +20,8 @@ spec:
           envFrom:
             - configMapRef:
                 name: {{ include "django-app.fullname" . }}-config
+            - secretRef:
+                name: {{ include "django-app.fullname" . }}-secret
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           workingDir: /myproject/myproject

@@ -31,7 +31,7 @@ spec:
   }
 
   environment {
-    AWS_REGION         = 'us-west-2'
+    AWS_REGION         = 'eu-north-1'
     ECR_REPOSITORY_URL = "${ECR_REPOSITORY_URL}"           // передається як Jenkins credential або параметр
     IMAGE_TAG          = "${env.BUILD_NUMBER}"
     GITOPS_REPO_URL    = 'https://github.com/Notalama/devops-cicd.git'
@@ -110,7 +110,7 @@ spec:
       echo "Build ${IMAGE_TAG} pushed to ECR and GitOps repo updated."
     }
     failure {
-      echo "Pipeline failed — check logs above."
+      echo "Pipeline failed - check logs above."
     }
   }
 }

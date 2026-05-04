@@ -11,7 +11,7 @@ resource "helm_release" "argocd" {
   chart            = "argo-cd"
   version          = var.chart_version
   create_namespace = false
-  timeout          = 900
+  timeout          = 300
 
   values = [
     file("${path.module}/values.yaml")

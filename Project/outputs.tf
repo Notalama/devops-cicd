@@ -73,3 +73,20 @@ output "aurora_security_group_id" {
   value       = module.rds_aurora.security_group_id
 }
 
+# ─── Monitoring ──────────────────────────────────────────────────────────────
+
+output "monitoring_namespace" {
+  description = "Namespace для Prometheus + Grafana"
+  value       = module.monitoring.namespace
+}
+
+output "grafana_service_name" {
+  description = "Service name Grafana - для port-forward"
+  value       = module.monitoring.grafana_service_name
+}
+
+output "prometheus_service_name" {
+  description = "Service name Prometheus - для port-forward"
+  value       = module.monitoring.prometheus_service_name
+}
+

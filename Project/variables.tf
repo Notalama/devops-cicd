@@ -6,8 +6,19 @@ variable "db_master_password" {
     Передавайте через змінну середовища TF_VAR_db_master_password або AWS Secrets Manager,
     ніколи не записуйте значення безпосередньо у код.
 
-    Приклад передачі:
-      export TF_VAR_db_master_password="$(aws secretsmanager get-secret-value \
-        --secret-id my-app/db/password --query SecretString --output text | jq -r .password)"
+    Приклад:
+      export TF_VAR_db_master_password="YourStr0ngPassword!"
+  EOT
+}
+
+variable "grafana_admin_password" {
+  type        = string
+  sensitive   = true
+  description = <<-EOT
+    Пароль admin-користувача Grafana.
+    Передавайте через змінну середовища TF_VAR_grafana_admin_password.
+
+    Приклад:
+      export TF_VAR_grafana_admin_password="GrafanaPass123!"
   EOT
 }

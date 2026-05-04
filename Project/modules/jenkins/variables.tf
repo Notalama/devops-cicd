@@ -34,7 +34,7 @@ variable "release_name" {
 variable "chart_version" {
   description = "Версія Jenkins Helm chart"
   type        = string
-  default     = "5.5.1"
+  default     = "5.9.18"
 }
 
 variable "admin_user" {
@@ -58,5 +58,5 @@ variable "ecr_repository_url" {
 variable "aws_region" {
   description = "AWS регіон для ECR"
   type        = string
-  default     = "us-west-2"
+  default     = "eu-north-1"
 }

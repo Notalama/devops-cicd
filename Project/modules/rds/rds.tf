@@ -54,7 +54,7 @@ resource "aws_db_instance" "this" {
   monitoring_interval                   = 60
   monitoring_role_arn                   = aws_iam_role.rds_enhanced_monitoring[0].arn
 
-  # Логи: для PostgreSQL відправляємо postgresql та upgrade, для MySQL — error, general, slowquery
+  # Логи: для PostgreSQL відправляємо postgresql та upgrade, для MySQL - error, general, slowquery
   enabled_cloudwatch_logs_exports = local.is_postgres ? ["postgresql", "upgrade"] : ["error", "general", "slowquery"]
 
   tags = merge(local.common_tags, { Name = var.identifier })

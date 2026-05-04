@@ -31,7 +31,7 @@ output "db_subnet_group_arn" {
 # ─────────────────────────────────────────────
 
 output "parameter_group_name" {
-  description = "Назва Parameter Group (для RDS — aws_db_parameter_group; для Aurora — aws_rds_cluster_parameter_group)."
+  description = "Назва Parameter Group (для RDS - aws_db_parameter_group; для Aurora - aws_rds_cluster_parameter_group)."
   value = var.use_aurora ? aws_rds_cluster_parameter_group.this[0].name : aws_db_parameter_group.this[0].name
 }
 

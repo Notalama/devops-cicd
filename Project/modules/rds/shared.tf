@@ -67,7 +67,7 @@ resource "aws_db_subnet_group" "this" {
 
 resource "aws_security_group" "this" {
   name        = "${var.identifier}-rds-sg"
-  description = "Security group for ${var.identifier} RDS/Aurora — port ${local.db_port}"
+  description = "Security group for ${var.identifier} RDS/Aurora - port ${local.db_port}"
   vpc_id      = var.vpc_id
 
   tags = merge(local.common_tags, { Name = "${var.identifier}-rds-sg" })
@@ -116,7 +116,7 @@ resource "aws_vpc_security_group_egress_rule" "all" {
 }
 
 # ─────────────────────────────────────────────
-# Parameter Group — звичайна RDS (aws_db_parameter_group)
+# Parameter Group - звичайна RDS (aws_db_parameter_group)
 # ─────────────────────────────────────────────
 
 resource "aws_db_parameter_group" "this" {
@@ -143,7 +143,7 @@ resource "aws_db_parameter_group" "this" {
 }
 
 # ─────────────────────────────────────────────
-# Parameter Group — Aurora (aws_rds_cluster_parameter_group + aws_db_parameter_group)
+# Parameter Group - Aurora (aws_rds_cluster_parameter_group + aws_db_parameter_group)
 # ─────────────────────────────────────────────
 
 # Cluster-level параметри (застосовуються до всього кластера)
@@ -170,7 +170,7 @@ resource "aws_rds_cluster_parameter_group" "this" {
   }
 }
 
-# Instance-level параметри (Aurora instance parameter group — зазвичай залишаємо default)
+# Instance-level параметри (Aurora instance parameter group - зазвичай залишаємо default)
 resource "aws_db_parameter_group" "aurora_instance" {
   count = var.use_aurora ? 1 : 0
 

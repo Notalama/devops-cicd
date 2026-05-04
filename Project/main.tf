@@ -20,7 +20,7 @@ terraform {
 }
 
 provider "aws" {
-  region = "us-west-2"
+  region = "eu-north-1"
 }
 
 # ─── S3 Backend ───────────────────────────────────────────────────────────────
@@ -38,7 +38,7 @@ module "vpc" {
   vpc_cidr_block     = "10.0.0.0/16"
   public_subnets     = ["10.0.1.0/24", "10.0.2.0/24", "10.0.3.0/24"]
   private_subnets    = ["10.0.4.0/24", "10.0.5.0/24", "10.0.6.0/24"]
-  availability_zones = ["us-west-2a", "us-west-2b", "us-west-2c"]
+  availability_zones = ["eu-north-1a", "eu-north-1b", "eu-north-1c"]
   vpc_name           = "project-vpc"
 }
 
@@ -61,11 +61,13 @@ module "ecr" {
 # ─── EKS cluster data ─────────────────────────────────────────────────────────
 
 data "aws_eks_cluster" "this" {
-  name = module.eks.cluster_name
+  name       = module.eks.cluster_name
+  depends_on = [module.eks]
 }
 
 data "aws_eks_cluster_auth" "this" {
-  name = module.eks.cluster_name
+  name       = module.eks.cluster_name
+  depends_on = [module.eks]
 }
 
 # ─── RDS PostgreSQL ───────────────────────────────────────────────────────────
@@ -76,7 +78,7 @@ module "rds_postgres" {
   identifier      = "project-postgres"
   use_aurora      = false
   engine          = "postgres"
-  engine_version  = "15.8"
+  engine_version  = "15.10"
   instance_class  = "db.t3.medium"
 
   allocated_storage     = 20
@@ -107,7 +109,7 @@ module "rds_aurora" {
   identifier      = "project-aurora"
   use_aurora      = true
   engine          = "aurora-postgresql"
-  engine_version  = "15.4"
+  engine_version  = "15.8"
   instance_class  = "db.t3.medium"
   replica_count   = 2
 
@@ -137,7 +139,26 @@ module "jenkins" {
   kubernetes_token           = data.aws_eks_cluster_auth.this.token
 
   ecr_repository_url = module.ecr.repository_url
-  aws_region         = "us-west-2"
+  aws_region         = "eu-north-1"
+}
+
+# ─── Monitoring (Prometheus + Grafana) ───────────────────────────────────────
+
+module "monitoring" {
+  source = "./modules/monitoring"
+
+  cluster_name               = module.eks.cluster_name
+  kubernetes_host            = data.aws_eks_cluster.this.endpoint
+  kubernetes_cluster_ca_cert = base64decode(data.aws_eks_cluster.this.certificate_authority[0].data)
+  kubernetes_token           = data.aws_eks_cluster_auth.this.token
+
+  grafana_admin_password = var.grafana_admin_password
+
+  prometheus_retention    = "15d"
+  prometheus_storage_size = "20Gi"
+  grafana_storage_size    = "5Gi"
+  storage_class_name      = "gp2"
+  alertmanager_enabled    = false
 }
 
 # ─── Argo CD ──────────────────────────────────────────────────────────────────

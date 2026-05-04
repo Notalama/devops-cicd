@@ -3,12 +3,8 @@ controller:
     username: "${admin_user}"
     password: "${admin_password}"
   serviceType: LoadBalancer
-  installPlugins:
-    - kubernetes:4306.vc91e951ea_eb_d
-    - workflow-aggregator:596.v8c21c963d92d
-    - git:5.5.2
-    - credentials-binding:681.vf91669a_32e45
-    - configuration-as-code:1873.vea_d0d973c5e2
+  additionalPlugins:
+    - amazon-ecr
   JCasC:
     defaultConfig: true
     configScripts:
@@ -43,7 +39,6 @@ controller:
                       - emptyDirVolume:
                           mountPath: "/kaniko/.docker"
                           memory: false
-                        name: "kaniko-docker-config"
 
 agent:
   enabled: true
@@ -53,6 +48,7 @@ rbac:
 
 persistence:
   enabled: true
+  storageClass: gp2
   size: 20Gi
 
 resources:
