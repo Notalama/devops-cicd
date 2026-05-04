@@ -1,0 +1,35 @@
+replicaCount: 2
+
+image:
+  repository: 905418284064.dkr.ecr.eu-north-1.amazonaws.com/project-django-ecr
+  pullPolicy: IfNotPresent
+  tag: "latest"
+
+service:
+  type: LoadBalancer
+  port: 80
+  targetPort: 8000
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 6
+  targetCPUUtilizationPercentage: 70
+
+env:
+  DEBUG: "False"
+  ALLOWED_HOSTS: "*"
+
+# Sensitive values — injected into a Kubernetes Secret, NOT stored in Git.
+# Override these by running the one-time kubectl command in the README.
+secret:
+  databaseUrl: "PLACEHOLDER"
+  secretKey: "PLACEHOLDER"
+
+resources:
+  limits:
+    cpu: 200m
+    memory: 256Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi

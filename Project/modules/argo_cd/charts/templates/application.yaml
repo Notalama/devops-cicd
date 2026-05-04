@@ -1,0 +1,25 @@
+{{- range .Values.applications }}
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: {{ .name }}
+  namespace: argocd
+spec:
+  project: {{ .project | default "default" }}
+  source:
+    repoURL: {{ .source.repoURL }}
+    targetRevision: {{ .source.targetRevision }}
+    path: {{ .source.path }}
+    {{- if .source.helm }}
+    helm:
+      {{- toYaml .source.helm | nindent 6 }}
+    {{- end }}
+  destination:
+    server: {{ .destination.server | default "https://kubernetes.default.svc" }}
+    namespace: {{ .destination.namespace | default "default" }}
+  {{- if .syncPolicy }}
+  syncPolicy:
+    {{- toYaml .syncPolicy | nindent 4 }}
+  {{- end }}
+---
+{{- end }}

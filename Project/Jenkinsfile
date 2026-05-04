@@ -1,0 +1,105 @@
+pipeline {
+  agent {
+    kubernetes {
+      label 'kaniko-agent'
+      defaultContainer 'kaniko'
+      yaml """
+apiVersion: v1
+kind: Pod
+metadata:
+  labels:
+    app: jenkins-kaniko-agent
+spec:
+  serviceAccountName: jenkins
+  containers:
+    - name: kaniko
+      image: gcr.io/kaniko-project/executor:v1.23.2-debug
+      command: ["/busybox/cat"]
+      tty: true
+      volumeMounts:
+        - name: docker-config
+          mountPath: /kaniko/.docker
+    - name: git
+      image: alpine/git:2.45.2
+      command: ["/bin/sh", "-c", "cat"]
+      tty: true
+  volumes:
+    - name: docker-config
+      emptyDir: {}
+"""
+    }
+  }
+
+  environment {
+    AWS_REGION         = 'us-west-2'
+    ECR_REPOSITORY_URL = "${module.ecr.repository_url}"
+    IMAGE_TAG          = "${env.BUILD_NUMBER}"
+    GITOPS_REPO_URL    = 'https://github.com/Notalama/devops-cicd.git'
+    GITOPS_VALUES_FILE = 'Project/charts/django-app/values.yaml'
+    AWS_CREDENTIALS_ID = 'aws-jenkins-creds'
+    GIT_CREDENTIALS_ID = 'git-token'
+  }
+
+  options {
+    disableConcurrentBuilds()
+    timestamps()
+  }
+
+  stages {
+    stage('Checkout') {
+      steps {
+        checkout scm
+      }
+    }
+
+    stage('Build and Push to ECR') {
+      steps {
+        withCredentials([
+          [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: "${AWS_CREDENTIALS_ID}"]
+        ]) {
+          container('kaniko') {
+            sh '''
+              set -eu
+              cat > /kaniko/.docker/config.json <<EOF
+              {
+                "credHelpers": {
+                  "${ECR_REPOSITORY_URL%%/*}": "ecr-login"
+                }
+              }
+              EOF
+
+              /kaniko/executor \
+                --context "${WORKSPACE}" \
+                --dockerfile "${WORKSPACE}/Dockerfile" \
+                --destination "${ECR_REPOSITORY_URL}:${IMAGE_TAG}" \
+                --destination "${ECR_REPOSITORY_URL}:latest"
+            '''
+          }
+        }
+      }
+    }
+
+    stage('Update Helm values in GitOps repo') {
+      steps {
+        container('git') {
+          withCredentials([usernamePassword(credentialsId: "${GIT_CREDENTIALS_ID}", usernameVariable: 'GIT_USER', passwordVariable: 'GIT_TOKEN')]) {
+            sh '''
+              set -eu
+              rm -rf gitops
+              git clone "https://${GIT_USER}:${GIT_TOKEN}@${GITOPS_REPO_URL#https://}" gitops
+              cd gitops
+
+              sed -i "s|^\\([[:space:]]*tag:[[:space:]]*\\).*|\\1\\"${IMAGE_TAG}\\"|g" "${GITOPS_VALUES_FILE}"
+
+              git config user.email "jenkins@local"
+              git config user.name "jenkins-bot"
+              git add "${GITOPS_VALUES_FILE}"
+              git commit -m "ci: update django image tag to ${IMAGE_TAG}" || true
+              git push origin main
+            '''
+          }
+        }
+      }
+    }
+  }
+}

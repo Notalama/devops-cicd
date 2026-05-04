@@ -1,0 +1,187 @@
+# ──────────────────────────────────────────────────────
+# kube-prometheus-stack values
+# Template variables: grafana_admin_user, grafana_admin_password,
+#   prometheus_retention, prometheus_storage_size,
+#   grafana_storage_size, storage_class_name, alertmanager_enabled
+# ──────────────────────────────────────────────────────
+
+# ── Grafana ────────────────────────────────────────────
+grafana:
+  adminUser: "${grafana_admin_user}"
+  adminPassword: "${grafana_admin_password}"
+
+  service:
+    type: ClusterIP
+    port: 80
+
+  persistence:
+    enabled: true
+    storageClassName: "${storage_class_name}"
+    size: "${grafana_storage_size}"
+    accessModes:
+      - ReadWriteOnce
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+  # Sidecar - автоматично підхоплює ConfigMap з дашбордами
+  sidecar:
+    dashboards:
+      enabled: true
+      searchNamespace: ALL
+      label: grafana_dashboard
+      labelValue: "1"
+
+  # Grafana.ini - додаткова конфігурація
+  grafana.ini:
+    server:
+      root_url: "%(protocol)s://%(domain)s:%(http_port)s/"
+    auth.anonymous:
+      enabled: false
+    dashboards:
+      default_home_dashboard_path: /var/lib/grafana/dashboards/default/kubernetes-cluster.json
+
+  # Провайдер дашбордів
+  dashboardProviders:
+    dashboardproviders.yaml:
+      apiVersion: 1
+      providers:
+        - name: default
+          orgId: 1
+          folder: ""
+          type: file
+          disableDeletion: false
+          editable: true
+          options:
+            path: /var/lib/grafana/dashboards/default
+
+  # Дашборди з grafana.com - імпортуються автоматично
+  dashboards:
+    default:
+      # Kubernetes cluster overview
+      kubernetes-cluster:
+        gnetId: 6417
+        revision: 1
+        datasource: Prometheus
+
+      # Node Exporter Full
+      node-exporter-full:
+        gnetId: 1860
+        revision: 37
+        datasource: Prometheus
+
+      # Kubernetes Pods
+      kubernetes-pods:
+        gnetId: 6336
+        revision: 1
+        datasource: Prometheus
+
+      # Kubernetes Deployments
+      kubernetes-deployments:
+        gnetId: 8588
+        revision: 1
+        datasource: Prometheus
+
+      # CoreDNS
+      coredns:
+        gnetId: 5926
+        revision: 1
+        datasource: Prometheus
+
+# ── Prometheus ─────────────────────────────────────────
+prometheus:
+  prometheusSpec:
+    retention: "${prometheus_retention}"
+
+    # Збирати всі ServiceMonitor та PodMonitor незалежно від лейблів
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    ruleSelectorNilUsesHelmValues: false
+
+    resources:
+      requests:
+        cpu: 200m
+        memory: 512Mi
+      limits:
+        cpu: 1000m
+        memory: 2Gi
+
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: "${storage_class_name}"
+          accessModes:
+            - ReadWriteOnce
+          resources:
+            requests:
+              storage: "${prometheus_storage_size}"
+
+    # Додаткові scrape конфіги (наприклад для RDS через CloudWatch exporter)
+    additionalScrapeConfigs: []
+
+  service:
+    type: ClusterIP
+
+# ── AlertManager ───────────────────────────────────────
+alertmanager:
+  enabled: ${alertmanager_enabled}
+
+  alertmanagerSpec:
+    storage:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: "${storage_class_name}"
+          accessModes:
+            - ReadWriteOnce
+          resources:
+            requests:
+              storage: 5Gi
+
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        cpu: 200m
+        memory: 256Mi
+
+# ── Node Exporter ──────────────────────────────────────
+nodeExporter:
+  enabled: true
+
+prometheus-node-exporter:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 30Mi
+    limits:
+      cpu: 200m
+      memory: 100Mi
+
+# ── kube-state-metrics ─────────────────────────────────
+kubeStateMetrics:
+  enabled: true
+
+kube-state-metrics:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+# ── Prometheus Operator ────────────────────────────────
+prometheusOperator:
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi

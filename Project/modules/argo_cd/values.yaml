@@ -1,0 +1,14 @@
+configs:
+  params:
+    server.insecure: true
+
+server:
+  service:
+    type: LoadBalancer
+
+redis:
+  enabled: true
+
+controller:
+  metrics:
+    enabled: true

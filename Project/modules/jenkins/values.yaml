@@ -1,0 +1,68 @@
+controller:
+  admin:
+    username: "${admin_user}"
+    password: "${admin_password}"
+  serviceType: LoadBalancer
+  additionalPlugins:
+    - amazon-ecr
+  JCasC:
+    defaultConfig: true
+    configScripts:
+      cloud-config: |
+        jenkins:
+          clouds:
+            - kubernetes:
+                name: "${kubernetes_cloud}"
+                namespace: "jenkins"
+                jenkinsUrl: "http://jenkins.jenkins.svc.cluster.local:8080"
+                templates:
+                  - name: "kaniko-agent"
+                    namespace: "jenkins"
+                    label: "kaniko-agent"
+                    containers:
+                      - name: "jnlp"
+                        image: "jenkins/inbound-agent:latest"
+                        args: "^$${computer.jnlpmac} ^$${computer.name}"
+                      - name: "kaniko"
+                        image: "gcr.io/kaniko-project/executor:v1.23.2-debug"
+                        command: "cat"
+                        ttyEnabled: true
+                      - name: "git"
+                        image: "alpine/git:2.45.2"
+                        command: "cat"
+                        ttyEnabled: true
+                      - name: "awscli"
+                        image: "amazon/aws-cli:2.17.56"
+                        command: "cat"
+                        ttyEnabled: true
+                    volumes:
+                      - emptyDirVolume:
+                          mountPath: "/kaniko/.docker"
+                          memory: false
+
+agent:
+  enabled: true
+
+rbac:
+  create: true
+
+persistence:
+  enabled: true
+  storageClass: gp2
+  size: 20Gi
+
+resources:
+  requests:
+    cpu: "500m"
+    memory: "1Gi"
+  limits:
+    cpu: "2000m"
+    memory: "2Gi"
+
+additionalExistingSecrets: []
+
+env:
+  - name: AWS_REGION
+    value: "${aws_region}"
+  - name: ECR_REPOSITORY
+    value: "${ecr_repository}"
