@@ -24,6 +24,3 @@ spec:
                 name: {{ include "django-app.fullname" . }}-secret
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
-          workingDir: /myproject/myproject
-          command: ["python"]
-          args: ["manage.py", "runserver", "0.0.0.0:8000"]
