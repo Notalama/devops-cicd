@@ -13,10 +13,8 @@ controller:
           clouds:
             - kubernetes:
                 name: "${kubernetes_cloud}"
-                    namespace: "jenkins"
-                    jenkinsUrl: "http://jenkins.jenkins.svc.cluster.local:8080"
-                    jenkinsTunnel: "jenkins-agent.jenkins.svc.cluster.local:50000"
-                    webSocket: true
+                namespace: "jenkins"
+                jenkinsUrl: "http://jenkins.jenkins.svc.cluster.local:8080"
                 templates:
                   - name: "kaniko-agent"
                     namespace: "jenkins"

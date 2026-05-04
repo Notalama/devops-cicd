@@ -58,22 +58,32 @@ spec:
         withCredentials([
           [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: "${AWS_CREDENTIALS_ID}"]
         ]) {
+          container('awscli') {
+            sh '''
+              set -eu
+              ECR_HOST="${ECR_REPOSITORY_URL%%/*}"
+              TOKEN=$(aws ecr get-login-password --region ${AWS_REGION})
+              AUTH=$(echo -n "AWS:${TOKEN}" | base64 | tr -d '\\n')
+              cat > /kaniko/.docker/config.json <<DOCKEREOF
+{
+  "auths": {
+    "${ECR_HOST}": {
+      "auth": "${AUTH}"
+    }
+  }
+}
+DOCKEREOF
+            '''
+          }
           container('kaniko') {
             sh '''
               set -eu
-              cat > /kaniko/.docker/config.json <<EOF
-              {
-                "credHelpers": {
-                  "${ECR_REPOSITORY_URL%%/*}": "ecr-login"
-                }
-              }
-              EOF
-
               /kaniko/executor \
                 --context "${WORKSPACE}/${DOCKER_CONTEXT}" \
                 --dockerfile "${WORKSPACE}/${DOCKERFILE_PATH}" \
                 --destination "${ECR_REPOSITORY_URL}:${IMAGE_TAG}" \
-                --destination "${ECR_REPOSITORY_URL}:latest"
+                --destination "${ECR_REPOSITORY_URL}:latest" \
+                --verbosity info
             '''
           }
         }
