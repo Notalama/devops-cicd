@@ -12,15 +12,50 @@ Developer push → Jenkins build → Kaniko → ECR → GitOps values.yaml → A
                                                                  Grafana
 ```
 
+---
+
+## Демонстрація роботи стеку
+
+### Jenkins — успішний CI build
+
+![Jenkins](jenkins.png)
+
+Jenkins pipeline `django-app` успішно завершив build #15: образ зібрано Kaniko, запушено в ECR з тегом `:15`, `values.yaml` в Git оновлено автоматично.
+
+### Argo CD — GitOps деплой
+
+![Argo CD](argo.png)
+
+Argo CD синхронізував `django-app` з Git-репозиторію. Pod `django-app-fc58895cd-pm26h` у namespace `default` має статус **Healthy**, образ `905418284064.dkr.ecr.eu-north-1.amazonaws.com/project-django-ecr:15` запущено та готово до роботи.
+
+### Django — застосунок доступний
+
+![Django API](image.png)
+
+Django REST API відповідає за публічним AWS ELB URL. Endpoint `/api/items/` повертає дані з RDS PostgreSQL: `{"items": [{"id": 1, "name": "Item One"}, {"id": 2, "name": "Item Two"}]}`.
+
+### Prometheus — збір метрик
+
+![Prometheus](prometheus.png)
+
+Prometheus (Status → Target health) показує активні ServiceMonitors: `kube-prometheus-stack-apiserver` (2/2 up), `kube-prometheus-stack-coredns` (2/2 up), `kube-prometheus-stack-grafana` (1/1 up). Всі системні компоненти кластера успішно scrape-яться.
+
+### Grafana — візуалізація метрик
+
+![Grafana](grafana.png)
+
+Grafana Metrics Explorer підключений до Prometheus як data source. Відображаються метрики кластера: пам'ять вузлів (`node_memory_MemAvailable_bytes:sum`), стан alerts, метрики API server та CoreDNS.
+
+---
+
 ## Структура проєкту
 
 ```
 Project/
-├── main.tf                          # Підключення всіх модулів (включно з monitoring)
+├── main.tf                          # Підключення всіх модулів
 ├── backend.tf                       # S3 backend для Terraform state
-├── variables.tf                     # Вхідні змінні (DB пароль тощо)
+├── variables.tf                     # Вхідні змінні (паролі)
 ├── outputs.tf                       # Виводи (endpoints, URLs)
-├── Jenkinsfile                      # Pipeline для збірки (кореневий)
 │
 ├── modules/
 │   ├── s3-backend/                  # S3 + DynamoDB для Terraform state
@@ -42,14 +77,15 @@ Project/
 │       ├── Chart.yaml
 │       ├── values.yaml              # image.tag оновлюється Jenkins'ом
 │       └── templates/
-│           ├── deployment.yaml
+│           ├── deployment.yaml      # Deployment — запускає образ через Dockerfile CMD
 │           ├── service.yaml
-│           ├── configmap.yaml
+│           ├── configmap.yaml       # DEBUG, ALLOWED_HOSTS
+│           ├── secret.yaml          # DATABASE_URL, SECRET_KEY (керується окремо)
 │           └── hpa.yaml
 │
 └── Django/                          # Вихідний код застосунку
-    ├── Dockerfile                   # Multi-stage production build
-    ├── Jenkinsfile                  # Pipeline для Django (context-aware)
+    ├── Dockerfile                   # Multi-stage production build (gunicorn)
+    ├── Jenkinsfile                  # Pipeline: Kaniko → ECR → GitOps update
     ├── docker-compose.yaml          # Локальна розробка з PostgreSQL
     └── app/
         ├── manage.py
@@ -65,23 +101,19 @@ Project/
 
 ---
 
-## Крок 1 - Передумови
+## Крок 1 — Передумови
 
 ### 1.1 Локальні інструменти
 
 ```bash
-# Перевірте наявність:
 aws --version           # >= 2.x
 terraform version       # >= 1.7
 kubectl version --client
 helm version
-docker --version
 git --version
 ```
 
-### 1.2 AWS IAM - необхідні права
-
-Обліковий запис (або роль), з якого запускається Terraform, повинен мати права на:
+### 1.2 AWS IAM — необхідні права
 
 | Сервіс | Дії |
 |---|---|
@@ -100,7 +132,7 @@ git --version
 aws configure
 # AWS Access Key ID:     <ваш ключ>
 # AWS Secret Access Key: <ваш секрет>
-# Default region name:   us-west-2
+# Default region name:   eu-north-1
 # Default output format: json
 ```
 
@@ -110,24 +142,27 @@ aws configure
 aws sts get-caller-identity
 ```
 
----
+### 1.4 Встановіть паролі перед будь-яким terraform-запуском
 
-### 1.4 Встановіть обидва паролі перед будь-яким terraform-запуском
+Паролі передаються виключно через змінні середовища — ніколи не зберігайте їх у файлах.
 
 ```bash
-export TF_VAR_db_master_password="YourStr0ngPassword!"
-export TF_VAR_grafana_admin_password="GrafanaPass123!"
+# Відкрийте новий термінал і введіть паролі (не відображаються на екрані)
+read -s TF_VAR_db_master_password   && export TF_VAR_db_master_password
+read -s TF_VAR_grafana_admin_password && export TF_VAR_grafana_admin_password
 ```
+
+> Ці змінні потрібно встановлювати кожного разу в новій сесії терміналу. Всі `terraform apply` та `terraform destroy` повинні виконуватися в цьому ж вікні.
 
 ---
 
-## Крок 2 - Підготовка Terraform State (перший запуск)
+## Крок 2 — Підготовка Terraform State (перший запуск)
 
-> S3-бакет та DynamoDB-таблиця для зберігання state ще не існують - потрібен локальний перший запуск.
+> S3-бакет та DynamoDB-таблиця ще не існують — потрібен локальний перший запуск.
 
 ### 2.1 Тимчасово вимкніть S3 backend
 
-Закоментуйте вміст `backend.tf`:
+Закоментуйте вміст `Project/backend.tf`:
 
 ```hcl
 # terraform {
@@ -135,14 +170,7 @@ export TF_VAR_grafana_admin_password="GrafanaPass123!"
 # }
 ```
 
-### 2.2 Встановіть паролі через змінні середовища
-
-```bash
-export TF_VAR_db_master_password="YourStr0ngPassword!"
-export TF_VAR_grafana_admin_password="GrafanaPass123!"
-```
-
-### 2.3 Ініціалізуйте та застосуйте лише модуль s3-backend
+### 2.2 Ініціалізуйте та застосуйте лише модуль s3-backend
 
 ```bash
 cd Project/
@@ -150,7 +178,7 @@ terraform init
 terraform apply -target=module.s3_backend
 ```
 
-### 2.4 Поверніть backend.tf та мігруйте state в S3
+### 2.3 Поверніть backend.tf та мігруйте state в S3
 
 Розкоментуйте `backend.tf`, потім:
 
@@ -161,229 +189,264 @@ terraform init -migrate-state
 
 ---
 
-## Крок 3 - Розгортання всієї інфраструктури
+## Крок 3 — Розгортання всієї інфраструктури
 
 ```bash
-# Встановіть паролі (якщо нова сесія)
-export TF_VAR_db_master_password="YourStr0ngPassword!"
-export TF_VAR_grafana_admin_password="GrafanaPass123!"
-
 terraform fmt -recursive
 terraform validate
-terraform plan -out=tfplan
-terraform apply tfplan
+terraform apply -auto-approve
 ```
 
 > Орієнтовний час: 20–35 хв (EKS ~15 хв, RDS ~10 хв).
 
-### 3.1 Перевірте виводи
-
-```bash
-terraform output eks_cluster_name
-terraform output ecr_repository_url
-terraform output jenkins_namespace
-terraform output argo_cd_namespace
-terraform output rds_postgres_endpoint
-terraform output aurora_writer_endpoint
-terraform output monitoring_namespace
-terraform output grafana_service_name
-terraform output prometheus_service_name
-```
-
-### 3.2 Налаштуйте kubectl
+### 3.1 Налаштуйте kubectl
 
 ```bash
 aws eks update-kubeconfig \
-  --region us-west-2 \
+  --region eu-north-1 \
   --name $(terraform output -raw eks_cluster_name)
 
-kubectl get nodes        # усі вузли мають бути Ready
+kubectl get nodes        # всі вузли мають бути Ready
 kubectl get pods -A      # перевірте системні поди
 ```
 
----
+### 3.2 Застосуйте ServiceMonitor окремим проходом
 
-## Крок 4 - Налаштування values.yaml для Django
-
-Замініть `DATABASE_URL` на реальний RDS endpoint:
+ServiceMonitor CRD встановлюється разом з `kube-prometheus-stack`. Якщо моніторинг застосовується одночасно з першим `terraform apply`, CRD може ще не існувати. Після успішного розгортання основного стеку виконайте:
 
 ```bash
-RDS_HOST=$(terraform output -raw rds_postgres_endpoint)
+terraform apply -target=module.monitoring -auto-approve
 ```
-
-Відредагуйте `Project/charts/django-app/values.yaml`:
-
-```yaml
-env:
-  DATABASE_URL: "postgres://dbadmin:YourStr0ngPassword!@<RDS_HOST>:5432/appdb"
-  ALLOWED_HOSTS: "*"
-  DEBUG: "False"
-
-image:
-  repository: <ECR_REPOSITORY_URL>  # з terraform output ecr_repository_url
-  tag: "latest"
-```
-
-Збережіть та закомітьте зміни в Git - Argo CD підхопить їх автоматично.
 
 ---
 
-## Крок 5 - Налаштування Jenkins
+## Крок 4 — Виправлення після розгортання EKS
 
-### 5.1 Отримайте URL та пароль Jenkins
+Ці кроки виконуються один раз після першого `terraform apply`.
+
+### 4.1 Встановіть StorageClass gp2 як стандартний
+
+EKS не завжди встановлює `gp2` як default StorageClass. Без цього Jenkins PVC не зможе забайндитись:
 
 ```bash
-kubectl get svc -n jenkins
-# Скопіюйте EXTERNAL-IP
+kubectl annotate storageclass gp2 \
+  storageclass.kubernetes.io/is-default-class=true
+```
+
+### 4.2 Збільшіть IMDS hop limit на вузлах EKS
+
+Pods всередині EKS потребують hop limit = 2 для доступу до EC2 Instance Metadata Service (IMDS). Це необхідно для автентифікації в ECR через IAM роль вузла (використовується Kaniko в Jenkins):
+
+```bash
+# Отримайте Instance IDs всіх вузлів
+INSTANCE_IDS=$(aws ec2 describe-instances \
+  --region eu-north-1 \
+  --filters "Name=tag:eks:cluster-name,Values=$(terraform output -raw eks_cluster_name)" \
+            "Name=instance-state-name,Values=running" \
+  --query "Reservations[*].Instances[*].InstanceId" \
+  --output text)
+
+# Встановіть hop limit = 2 на кожному вузлі
+for ID in $INSTANCE_IDS; do
+  aws ec2 modify-instance-metadata-options \
+    --region eu-north-1 \
+    --instance-id $ID \
+    --http-put-response-hop-limit 2 \
+    --http-endpoint enabled
+  echo "Updated: $ID"
+done
+```
+
+---
+
+## Крок 5 — Налаштування Django Secret
+
+Секрет зберігається лише в Kubernetes і **ніколи не потрапляє в Git**. Argo CD налаштований ігнорувати відмінності в полі `data` цього секрету (`RespectIgnoreDifferences=true`), тому ручне значення залишиться після синхронізацій.
+
+### 5.1 Встановіть реальні значення секрету
+
+```bash
+# Введіть пароль БД (не відображається на екрані)
+read -s TF_VAR_db_master_password && export TF_VAR_db_master_password
+
+RDS_HOST=$(aws rds describe-db-instances \
+  --region eu-north-1 \
+  --query "DBInstances[?DBInstanceIdentifier=='project-postgres'].Endpoint.Address" \
+  --output text)
+
+kubectl create secret generic django-app-secret \
+  --namespace default \
+  --from-literal=DATABASE_URL="postgresql://dbadmin:${TF_VAR_db_master_password}@${RDS_HOST}:5432/appdb" \
+  --from-literal=SECRET_KEY="$(openssl rand -base64 40)" \
+  --dry-run=client -o yaml | kubectl apply -f -
+```
+
+### 5.2 Перевірте, що секрет встановлено
+
+```bash
+kubectl get secret django-app-secret -n default \
+  -o jsonpath='{.data.DATABASE_URL}' | base64 -d && echo ""
+# Має показати: postgresql://dbadmin:...@project-postgres...
+```
+
+### 5.3 Виконайте міграції бази даних
+
+```bash
+POD=$(kubectl get pod -n default -l app=django-app -o jsonpath='{.items[0].metadata.name}')
+kubectl exec -n default $POD -- python /app/manage.py migrate --no-input
+```
+
+### 5.4 Перезапустіть Django pods
+
+```bash
+kubectl rollout restart deployment django-app -n default
+kubectl rollout status deployment django-app -n default
+```
+
+---
+
+## Крок 6 — Налаштування Jenkins
+
+### 6.1 Отримайте URL та пароль Jenkins
+
+```bash
+kubectl get svc -n jenkins jenkins
+# Скопіюйте EXTERNAL-IP, відкрийте http://<EXTERNAL-IP>:8080
 
 kubectl get secret --namespace jenkins jenkins \
-  -o jsonpath="{.data.jenkins-admin-password}" | base64 -d
+  -o jsonpath="{.data.jenkins-admin-password}" | base64 -d && echo ""
 ```
 
-### 5.2 Додайте Credentials у Jenkins UI
+Логін: `admin`, пароль — вивід команди вище.
 
-Перейдіть: **Manage Jenkins → Credentials → System → Global credentials**
+### 6.2 Додайте Credential у Jenkins UI
+
+Перейдіть: **Manage Jenkins → Credentials → System → Global credentials → Add Credentials**
 
 | ID | Тип | Значення |
 |---|---|---|
-| `aws-jenkins-creds` | AWS Credentials | AWS Access Key ID + Secret |
-| `git-token` | Username with password | GitHub username + PAT |
+| `git-token` | Username with password | GitHub username + Personal Access Token (scope: `repo`) |
 
-> GitHub PAT потрібні права: `repo` (read/write).
+> ECR автентифікація виконується автоматично через IAM роль EKS-вузла — окремі AWS credentials не потрібні.
 
-### 5.3 Створіть Pipeline job
+### 6.3 Патч сервісу Jenkins для JNLP агентів
 
-1. **New Item → Pipeline**
+Щоб Kubernetes-агенти (Kaniko pods) могли підключатись до Jenkins controller:
+
+```bash
+kubectl patch svc jenkins -n jenkins --type='json' -p='[
+  {"op":"add","path":"/spec/ports/-","value":{"name":"agent","port":50000,"targetPort":50000}}
+]'
+```
+
+### 6.4 Створіть Pipeline job
+
+1. **New Item → Pipeline → OK**
 2. **Pipeline → Definition**: Pipeline script from SCM
-3. **SCM**: Git → `https://github.com/Notalama/devops-cicd.git`
-4. **Script Path**: `Project/Django/Jenkinsfile`
-5. **Build Triggers**: Poll SCM або GitHub webhook
+3. **SCM**: Git → `https://github.com/<your-user>/devops-cicd.git`
+4. **Credentials**: `git-token`
+5. **Script Path**: `Project/Django/Jenkinsfile`
+6. **Save → Build Now**
 
-### 5.4 Встановіть ECR URL як environment variable
-
-У **Pipeline job → Configure → Build Environment**:
-
-```
-ECR_REPOSITORY_URL = <значення з terraform output ecr_repository_url>
-```
-
-### 5.5 Запустіть перший build
-
-**Build Now** - pipeline виконає:
-1. `Checkout` - клонує репозиторій
-2. `Build and Push to ECR` - Kaniko збирає образ та пушить з тегом BUILD_NUMBER
-3. `Update Helm values` - оновлює `image.tag` в `values.yaml` та пушить в Git
+Pipeline виконує:
+1. `Checkout` — клонує репозиторій
+2. `Build and Push to ECR` — Kaniko збирає образ, пушить у ECR з тегом `BUILD_NUMBER`
+3. `Update Helm values` — оновлює `image.tag` у `values.yaml` та пушить в Git
 
 ---
 
-## Крок 6 - Перевірка Argo CD
+## Крок 7 — Перевірка Argo CD
 
-### 6.1 Отримайте URL та пароль Argo CD
+### 7.1 Отримайте URL та пароль Argo CD
 
 ```bash
-kubectl get svc -n argocd
-# EXTERNAL-IP → відкрийте в браузері
+kubectl get svc -n argocd argocd-server
+# EXTERNAL-IP → відкрийте http://<EXTERNAL-IP>  (http://, не https://)
 
 kubectl -n argocd get secret argocd-initial-admin-secret \
-  -o jsonpath="{.data.password}" | base64 -d
+  -o jsonpath="{.data.password}" | base64 -d && echo ""
 ```
 
-Логін: `admin` + пароль вище.
+Логін: `admin`, пароль — вивід команди вище.
 
-### 6.2 Перевірте Application
+### 7.2 Перевірте Application
 
 У Argo CD UI відкрийте `django-app`:
-- **Status**: `Synced` + `Healthy`
-- **Images**: тег відповідає останньому BUILD_NUMBER Jenkins
+- **Sync Status**: `Synced`
+- **Health**: `Healthy`
+- **Image tag**: відповідає останньому `BUILD_NUMBER` Jenkins
 
-Якщо статус `OutOfSync`:
+Якщо статус `OutOfSync`, примусово синхронізуйте:
 
 ```bash
-argocd app sync django-app   # примусова синхронізація
+kubectl annotate application django-app -n argocd \
+  argocd.argoproj.io/refresh=hard --overwrite
 ```
 
-### 6.3 Перевірте деплой Django
+### 7.3 Перевірте Django API
 
 ```bash
-kubectl get pods -n django-app
-kubectl get svc -n django-app
+DJANGO_URL=$(kubectl get svc django-app -n default \
+  -o jsonpath='http://{.status.loadBalancer.ingress[0].hostname}')
 
-# Отримайте зовнішній IP
-DJANGO_IP=$(kubectl get svc django-app -n django-app \
-  -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
-
-curl http://${DJANGO_IP}/healthz/
+curl ${DJANGO_URL}/healthz/
 # {"status": "ok"}
 
-curl http://${DJANGO_IP}/api/items/
-# {"items": [...]}
+curl ${DJANGO_URL}/api/items/
+# {"items": [{"id": 1, "name": "Item One"}, {"id": 2, "name": "Item Two"}]}
 ```
 
 ---
 
-## Крок 7 - Моніторинг: Prometheus + Grafana
+## Крок 8 — Моніторинг: Prometheus + Grafana
 
-### 7.1 Перевірка статусу ресурсів у всіх namespace
+### 8.1 Перевірка статусу ресурсів
 
 ```bash
-kubectl get all -n jenkins
-kubectl get all -n argocd
-kubectl get all -n monitoring
+kubectl get pods -n jenkins
+kubectl get pods -n argocd
+kubectl get pods -n monitoring
 ```
 
-Всі поди мають бути в стані `Running`. У `monitoring` очікуються:
+Всі поди мають бути `Running`. У `monitoring` очікуються:
 
 ```
 pod/kube-prometheus-stack-grafana-...
 pod/kube-prometheus-stack-kube-state-metrics-...
 pod/kube-prometheus-stack-operator-...
-pod/kube-prometheus-stack-prometheus-node-exporter-...
+pod/kube-prometheus-stack-prometheus-node-exporter-...  (по одному на кожен вузол)
 pod/prometheus-kube-prometheus-stack-prometheus-0
 ```
 
-### 7.2 Port-forward до Grafana
+### 8.2 Port-forward до Prometheus
 
 ```bash
-kubectl port-forward svc/$(terraform output -raw grafana_service_name) \
-  3000:80 -n monitoring
+kubectl port-forward -n monitoring \
+  svc/kube-prometheus-stack-prometheus 9090:9090
 ```
 
-Відкрийте в браузері: **http://localhost:3000**
-
-- Логін: `admin`
-- Пароль: значення `TF_VAR_grafana_admin_password`
-
-### 7.3 Port-forward до Prometheus
-
-```bash
-kubectl port-forward svc/$(terraform output -raw prometheus_service_name) \
-  9090:9090 -n monitoring
-```
-
-Відкрийте в браузері: **http://localhost:9090**
+Відкрийте **http://localhost:9090** → **Status → Target health**
 
 Перевірте метрики:
-- `up` - всі scrape targets мають значення `1`
-- `container_cpu_usage_seconds_total` - CPU навантаження контейнерів
-- `kube_pod_status_phase` - статус подів
+- `up` — всі scrape targets мають значення `1`
+- `kube_pod_status_phase` — статус подів кластера
+- `container_cpu_usage_seconds_total` — CPU навантаження
 
-### 7.4 Port-forward до Jenkins та Argo CD
+### 8.3 Port-forward до Grafana
 
 ```bash
-# Jenkins
-kubectl port-forward svc/jenkins 8080:8080 -n jenkins
-# http://localhost:8080
-
-# Argo CD
-kubectl port-forward svc/argocd-server 8081:443 -n argocd
-# https://localhost:8081  (підтвердіть self-signed cert)
+kubectl port-forward -n monitoring \
+  svc/kube-prometheus-stack-grafana 3000:80
 ```
 
-### 7.5 Grafana Dashboards
+Відкрийте **http://localhost:3000**
 
-Після входу в Grafana перейдіть: **Dashboards → Browse**
+- Логін: `admin`
+- Пароль: значення `TF_VAR_grafana_admin_password` (яке ви встановили)
 
-Автоматично імпортовані дашборди:
+### 8.4 Grafana Dashboards
+
+Перейдіть: **Dashboards → Browse**
 
 | Дашборд | Grafana ID | Що показує |
 |---|---|---|
@@ -393,69 +456,20 @@ kubectl port-forward svc/argocd-server 8081:443 -n argocd
 | Kubernetes Deployments | 8588 | Стан deployments |
 | CoreDNS | 5926 | Метрики DNS |
 
-### 7.6 Додати метрики Django (опціонально)
-
-Щоб Django публікував метрики для Prometheus, додайте у `Django/app/requirements.txt`:
-
-```
-django-prometheus==2.3.1
-```
-
-У `config/settings.py` додайте:
-
-```python
-INSTALLED_APPS = [
-    ...
-    "django_prometheus",
-]
-
-MIDDLEWARE = [
-    "django_prometheus.middleware.PrometheusBeforeMiddleware",
-    ...
-    "django_prometheus.middleware.PrometheusAfterMiddleware",
-]
-```
-
-У `config/urls.py`:
-
-```python
-urlpatterns = [
-    path("", include("django_prometheus.urls")),
-    ...
-]
-```
-
-Після цього `/metrics` endpoint буде автоматично зібраний через `ServiceMonitor` `django-app` у namespace `monitoring`.
+Або використовуйте **Explore → Metrics** для перегляду всіх зібраних метрик.
 
 ---
 
-## Крок 8 - Локальна розробка Django (docker-compose)
-
-```bash
-cd Project/Django/
-
-# Запуск з PostgreSQL у Docker
-docker compose up -d
-
-# Застосуйте міграції (при першому запуску)
-docker compose exec web python manage.py migrate
-docker compose exec web python manage.py createsuperuser
-
-# Відкрийте: http://localhost:8000/healthz/
-```
-
----
-
-## Крок 9 - Повний CI/CD цикл (перевірка)
+## Крок 9 — Повний CI/CD цикл (перевірка)
 
 ```
 1. Змініть код у Django/app/api/views.py
 2. git add . && git commit -m "feat: update api" && git push origin main
-3. Jenkins автоматично запускає build (або запустіть вручну)
-4. Kaniko → збирає новий образ → пушить в ECR з тегом BUILD_NUMBER
-5. Jenkins → оновлює image.tag у Project/charts/django-app/values.yaml
-6. Argo CD → помічає зміну в Git → синхронізує → оновлює поди в EKS
-7. Нова версія застосунку доступна за зовнішнім IP
+3. Jenkins автоматично запускає build (або запустіть вручну: Build Now)
+4. Kaniko → збирає образ → пушить у ECR з тегом BUILD_NUMBER
+5. Jenkins → оновлює image.tag у Project/charts/django-app/values.yaml → git push
+6. Argo CD → помічає зміну в Git → синхронізує → rolling update в EKS
+7. Нова версія Django доступна за тим самим зовнішнім URL
 ```
 
 ---
@@ -465,58 +479,69 @@ docker compose exec web python manage.py createsuperuser
 ### Terraform
 
 ```bash
-terraform output -json                        # всі виводи у JSON
-terraform state list                          # список ресурсів у state
-terraform state show module.rds_postgres.aws_db_instance.this[0]
+terraform output -json                              # всі виводи у JSON
+terraform state list                               # список ресурсів у state
+terraform state show module.eks.aws_eks_cluster.this[0]
 ```
 
 ### Kubernetes
 
 ```bash
-kubectl get pods -A                           # всі поди
-kubectl get all -n jenkins                    # Jenkins ресурси
-kubectl get all -n argocd                     # Argo CD ресурси
-kubectl get all -n monitoring                 # Prometheus + Grafana ресурси
-kubectl logs -n jenkins <pod-name> -f         # логи Jenkins
-kubectl describe pod <pod> -n <ns>            # деталі поду
-kubectl get events -n django-app --sort-by='.lastTimestamp'
+kubectl get pods -A                                # всі поди
+kubectl get all -n jenkins                         # Jenkins ресурси
+kubectl get all -n argocd                          # Argo CD ресурси
+kubectl get all -n monitoring                      # Prometheus + Grafana ресурси
+kubectl get all -n default                         # Django ресурси
+kubectl logs -n jenkins <pod-name> -f              # логи Jenkins controller
+kubectl describe pod <pod> -n <ns>                 # деталі поду
+kubectl get events -n default --sort-by='.lastTimestamp'
 ```
 
-### Моніторинг
+### Секрет Django (оновлення)
 
 ```bash
-# Port-forward (всі три одночасно в окремих терміналах)
-kubectl port-forward svc/jenkins 8080:8080 -n jenkins &
-kubectl port-forward svc/argocd-server 8081:443 -n argocd &
-kubectl port-forward svc/$(terraform output -raw grafana_service_name) 3000:80 -n monitoring &
+# Оновити DATABASE_URL (після зміни пароля або endpoint)
+read -s TF_VAR_db_master_password && export TF_VAR_db_master_password
 
-# Prometheus targets - перевірити scrape стан
-kubectl port-forward svc/$(terraform output -raw prometheus_service_name) 9090:9090 -n monitoring
+kubectl create secret generic django-app-secret \
+  --namespace default \
+  --from-literal=DATABASE_URL="postgresql://dbadmin:${TF_VAR_db_master_password}@<RDS_HOST>:5432/appdb" \
+  --from-literal=SECRET_KEY="$(openssl rand -base64 40)" \
+  --dry-run=client -o yaml | kubectl apply -f -
 
-# Перевірити ServiceMonitor для Django
-kubectl get servicemonitor -n monitoring
-kubectl describe servicemonitor django-app -n monitoring
+kubectl rollout restart deployment django-app -n default
+```
+
+### Моніторинг (port-forward всіх сервісів)
+
+```bash
+# В окремих вкладках терміналу:
+kubectl port-forward svc/jenkins 8080:8080 -n jenkins
+kubectl port-forward svc/argocd-server 8081:80 -n argocd
+kubectl port-forward svc/kube-prometheus-stack-grafana 3000:80 -n monitoring
+kubectl port-forward svc/kube-prometheus-stack-prometheus 9090:9090 -n monitoring
 ```
 
 ### ECR
 
 ```bash
-# Ручний логін та пуш (для тестування)
-aws ecr get-login-password --region us-west-2 | \
+# Ручний логін (для тестування)
+aws ecr get-login-password --region eu-north-1 | \
   docker login --username AWS \
   --password-stdin $(terraform output -raw ecr_repository_url | cut -d/ -f1)
 
-docker build -t django-app Project/Django/
-docker tag django-app:latest $(terraform output -raw ecr_repository_url):manual
-docker push $(terraform output -raw ecr_repository_url):manual
+# Список образів в репозиторії
+aws ecr list-images \
+  --repository-name $(terraform output -raw ecr_repository_url | cut -d/ -f2) \
+  --region eu-north-1
 ```
 
 ### RDS
 
 ```bash
-# Підключення до PostgreSQL через kubectl port-forward
+# Підключення до PostgreSQL через тимчасовий pod
 kubectl run psql-client --rm -it --image=postgres:15-alpine \
-  --env="PGPASSWORD=YourStr0ngPassword!" -- \
+  --env="PGPASSWORD=${TF_VAR_db_master_password}" -- \
   psql -h $(terraform output -raw rds_postgres_endpoint) \
        -U dbadmin -d appdb
 ```
@@ -526,8 +551,10 @@ kubectl run psql-client --rm -it --image=postgres:15-alpine \
 ## Видалення інфраструктури
 
 ```bash
-export TF_VAR_db_master_password="YourStr0ngPassword!"
-export TF_VAR_grafana_admin_password="GrafanaPass123!"
+# Встановіть паролі перед destroy
+read -s TF_VAR_db_master_password   && export TF_VAR_db_master_password
+read -s TF_VAR_grafana_admin_password && export TF_VAR_grafana_admin_password
+
 terraform destroy
 ```
 
@@ -540,21 +567,26 @@ terraform destroy
 | Проблема | Вирішення |
 |---|---|
 | `Error: Backend S3 bucket not found` | Виконайте Крок 2 (перший запуск без backend) |
-| `EKS nodes NotReady` | `kubectl describe node <name>` - перевірте taints/events |
-| `Kaniko: unauthorized` | Перевірте credentials `aws-jenkins-creds` у Jenkins |
-| `Argo CD: ComparisonError` | Перевірте, чи `app_target_path` збігається з реальним шляхом в Git |
-| `RDS: timeout` | Перевірте Security Group - `allowed_cidr_blocks` має включати VPC CIDR |
-| `TF_VAR_db_master_password not set` | `export TF_VAR_db_master_password="..."` перед `terraform apply` |
-| `TF_VAR_grafana_admin_password not set` | `export TF_VAR_grafana_admin_password="..."` перед `terraform apply` |
-| Grafana pod `CrashLoopBackOff` | Перевірте PVC: `kubectl get pvc -n monitoring` - StorageClass `gp2` має бути доступний |
-| Prometheus не scrape Django | `kubectl get servicemonitor -n monitoring` - перевірте labels на Service Django |
+| `EKS nodes NotReady` | `kubectl describe node <name>` — перевірте taints/events |
+| `Jenkins PVC Pending` | `kubectl annotate storageclass gp2 storageclass.kubernetes.io/is-default-class=true` |
+| `Kaniko: Unable to locate credentials` | Збільшіть IMDS hop limit до 2 (Крок 4.2) |
+| `ECR InvalidSignatureException` | Переконайтеся, що до IAM ролі вузла приєднана `AmazonEC2ContainerRegistryPowerUser` |
+| Jenkins agent offline (порт 50000) | `kubectl patch svc jenkins -n jenkins` — додайте порт 50000 (Крок 6.3) |
+| `Invalid option type "timestamps"` | Видаліть `timestamps()` з блоку `options` в Jenkinsfile |
+| `Django: ValueError: No support for ''` | Оновіть `django-app-secret` реальним `DATABASE_URL` (Крок 5) |
+| Argo CD перезаписує секрет | `RespectIgnoreDifferences=true` + `ignoreDifferences` для `/data` секрету (вже застосовано) |
+| `ServiceMonitor CRD not found` | Застосуйте `terraform apply -target=module.monitoring` після першого apply |
+| `Argo CD: ComparisonError` | Перевірте, чи `source.path` у Application збігається з реальним шляхом в Git |
+| `RDS: timeout` | Перевірте Security Group — allowed_cidr_blocks має включати VPC CIDR |
+| `git push 403` | Переконайтеся, що GitHub PAT має права `repo` (read/write) та використовується credential `git-token` |
+| Grafana pod `CrashLoopBackOff` | `kubectl get pvc -n monitoring` — StorageClass `gp2` має бути default (Крок 4.1) |
 
 ---
 
 ## Модуль `rds`
 
 Універсальний модуль для розгортання реляційної бази даних на AWS.
-Підтримує **звичайну RDS instance** (PostgreSQL / MySQL) та **Aurora Cluster** - вибір здійснюється прапором `use_aurora`.
+Підтримує **звичайну RDS instance** (PostgreSQL / MySQL) та **Aurora Cluster** — вибір здійснюється прапором `use_aurora`.
 
 ### Що створює модуль `rds`
 
@@ -562,7 +594,7 @@ terraform destroy
 |---|---|
 | `aws_db_subnet_group` | Завжди |
 | `aws_security_group` | Завжди |
-| `aws_db_parameter_group` | `use_aurora = false` (RDS) або Aurora instance PG |
+| `aws_db_parameter_group` | `use_aurora = false` |
 | `aws_rds_cluster_parameter_group` | `use_aurora = true` |
 | `aws_db_instance` | `use_aurora = false` |
 | `aws_rds_cluster` | `use_aurora = true` |
@@ -571,7 +603,7 @@ terraform destroy
 
 ### Приклади використання
 
-#### Звичайна RDS - PostgreSQL
+#### Звичайна RDS — PostgreSQL
 
 ```hcl
 module "rds" {
@@ -580,7 +612,7 @@ module "rds" {
   identifier      = "my-app-postgres"
   use_aurora      = false
   engine          = "postgres"
-  engine_version  = "15.8"
+  engine_version  = "15.10"
   instance_class  = "db.t3.medium"
 
   allocated_storage     = 20
@@ -610,7 +642,7 @@ module "rds_aurora" {
   identifier      = "my-app-aurora"
   use_aurora      = true
   engine          = "aurora-postgresql"
-  engine_version  = "15.4"
+  engine_version  = "15.8"
   instance_class  = "db.r6g.large"
   replica_count   = 2
 
@@ -628,7 +660,7 @@ module "rds_aurora" {
 | Output | Опис |
 |---|---|
 | `db_endpoint` | Основний endpoint для підключення |
-| `db_reader_endpoint` | Reader endpoint (Aurora) або той самий endpoint (RDS) |
+| `db_reader_endpoint` | Reader endpoint (Aurora) або той самий (RDS) |
 | `db_port` | Порт БД |
 | `db_name` | Назва початкової БД |
 | `master_username` | Master username |
@@ -639,30 +671,30 @@ module "rds_aurora" {
 | `aurora_cluster_id` | (Aurora) ID кластера |
 | `aurora_instance_ids` | (Aurora) List ID усіх instances |
 
-### Опис змінних модуля `rds`
+### Змінні модуля `rds`
 
 | Змінна | Тип | За замовч. | Обов'язкова | Опис |
 |---|---|---|---|---|
-| `identifier` | `string` | - | ✅ | Унікальний префікс для всіх ресурсів |
-| `use_aurora` | `bool` | `false` | - | `true` → Aurora Cluster, `false` → RDS Instance |
-| `engine` | `string` | `"postgres"` | - | `postgres`, `mysql`, `aurora-postgresql`, `aurora-mysql` |
-| `engine_version` | `string` | `"15.8"` | - | Версія движка |
-| `instance_class` | `string` | `"db.t3.medium"` | - | Клас інстансу |
-| `allocated_storage` | `number` | `20` | - | (RDS) Початковий розмір ГБ |
-| `max_allocated_storage` | `number` | `100` | - | (RDS) Макс. розмір autoscaling ГБ |
-| `storage_type` | `string` | `"gp3"` | - | (RDS) Тип EBS: gp2/gp3/io1/io2 |
-| `multi_az` | `bool` | `false` | - | (RDS) Увімкнути Multi-AZ |
-| `replica_count` | `number` | `1` | - | (Aurora) Кількість instances |
-| `database_name` | `string` | - | ✅ | Назва початкової БД |
-| `master_username` | `string` | - | ✅ | Master username |
-| `master_password` | `string` | - | ✅ | Master password (sensitive) |
-| `vpc_id` | `string` | - | ✅ | ID VPC |
-| `subnet_ids` | `list(string)` | - | ✅ | Мінімум 2 підмережі в різних AZ |
-| `allowed_cidr_blocks` | `list(string)` | `[]` | - | CIDR з доступом до БД |
-| `allowed_security_group_ids` | `list(string)` | `[]` | - | SG з доступом до БД |
-| `backup_retention_period` | `number` | `7` | - | Дні зберігання backup |
-| `deletion_protection` | `bool` | `true` | - | Захист від видалення |
-| `skip_final_snapshot` | `bool` | `false` | - | Пропустити фінальний snapshot |
-| `storage_encrypted` | `bool` | `true` | - | Шифрувати storage |
-| `kms_key_id` | `string` | `null` | - | ARN KMS-ключа |
-| `tags` | `map(string)` | `{}` | - | Теги для всіх ресурсів |
+| `identifier` | `string` | — | ✅ | Унікальний префікс для всіх ресурсів |
+| `use_aurora` | `bool` | `false` | — | `true` → Aurora Cluster, `false` → RDS Instance |
+| `engine` | `string` | `"postgres"` | — | `postgres`, `mysql`, `aurora-postgresql`, `aurora-mysql` |
+| `engine_version` | `string` | `"15.10"` | — | Версія движка |
+| `instance_class` | `string` | `"db.t3.medium"` | — | Клас інстансу |
+| `allocated_storage` | `number` | `20` | — | (RDS) Початковий розмір ГБ |
+| `max_allocated_storage` | `number` | `100` | — | (RDS) Макс. розмір autoscaling ГБ |
+| `storage_type` | `string` | `"gp3"` | — | (RDS) Тип EBS: gp2/gp3/io1/io2 |
+| `multi_az` | `bool` | `false` | — | (RDS) Увімкнути Multi-AZ |
+| `replica_count` | `number` | `1` | — | (Aurora) Кількість instances |
+| `database_name` | `string` | — | ✅ | Назва початкової БД |
+| `master_username` | `string` | — | ✅ | Master username |
+| `master_password` | `string` | — | ✅ | Master password (sensitive) |
+| `vpc_id` | `string` | — | ✅ | ID VPC |
+| `subnet_ids` | `list(string)` | — | ✅ | Мінімум 2 підмережі в різних AZ |
+| `allowed_cidr_blocks` | `list(string)` | `[]` | — | CIDR з доступом до БД |
+| `allowed_security_group_ids` | `list(string)` | `[]` | — | SG з доступом до БД |
+| `backup_retention_period` | `number` | `7` | — | Дні зберігання backup |
+| `deletion_protection` | `bool` | `true` | — | Захист від видалення |
+| `skip_final_snapshot` | `bool` | `false` | — | Пропустити фінальний snapshot |
+| `storage_encrypted` | `bool` | `true` | — | Шифрувати storage |
+| `kms_key_id` | `string` | `null` | — | ARN KMS-ключа |
+| `tags` | `map(string)` | `{}` | — | Теги для всіх ресурсів |
