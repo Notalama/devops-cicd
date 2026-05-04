@@ -12,42 +12,6 @@ Developer push → Jenkins build → Kaniko → ECR → GitOps values.yaml → A
                                                                  Grafana
 ```
 
----
-
-## Демонстрація роботи стеку
-
-### Jenkins — успішний CI build
-
-![Jenkins](jenkins.png)
-
-Jenkins pipeline `django-app` успішно завершив build #15: образ зібрано Kaniko, запушено в ECR з тегом `:15`, `values.yaml` в Git оновлено автоматично.
-
-### Argo CD — GitOps деплой
-
-![Argo CD](argo.png)
-
-Argo CD синхронізував `django-app` з Git-репозиторію. Pod `django-app-fc58895cd-pm26h` у namespace `default` має статус **Healthy**, образ `905418284064.dkr.ecr.eu-north-1.amazonaws.com/project-django-ecr:15` запущено та готово до роботи.
-
-### Django — застосунок доступний
-
-![Django API](image.png)
-
-Django REST API відповідає за публічним AWS ELB URL. Endpoint `/api/items/` повертає дані з RDS PostgreSQL: `{"items": [{"id": 1, "name": "Item One"}, {"id": 2, "name": "Item Two"}]}`.
-
-### Prometheus — збір метрик
-
-![Prometheus](prometheus.png)
-
-Prometheus (Status → Target health) показує активні ServiceMonitors: `kube-prometheus-stack-apiserver` (2/2 up), `kube-prometheus-stack-coredns` (2/2 up), `kube-prometheus-stack-grafana` (1/1 up). Всі системні компоненти кластера успішно scrape-яться.
-
-### Grafana — візуалізація метрик
-
-![Grafana](grafana.png)
-
-Grafana Metrics Explorer підключений до Prometheus як data source. Відображаються метрики кластера: пам'ять вузлів (`node_memory_MemAvailable_bytes:sum`), стан alerts, метрики API server та CoreDNS.
-
----
-
 ## Структура проєкту
 
 ```
@@ -698,3 +662,37 @@ module "rds_aurora" {
 | `storage_encrypted` | `bool` | `true` | — | Шифрувати storage |
 | `kms_key_id` | `string` | `null` | — | ARN KMS-ключа |
 | `tags` | `map(string)` | `{}` | — | Теги для всіх ресурсів |
+
+---
+
+## Демонстрація роботи стеку
+
+### Jenkins — успішний CI build
+
+![Jenkins](jenkins.png)
+
+Jenkins pipeline `django-app` успішно завершив build #15: образ зібрано Kaniko, запушено в ECR з тегом `:15`, `values.yaml` в Git оновлено автоматично.
+
+### Argo CD — GitOps деплой
+
+![Argo CD](argo.png)
+
+Argo CD синхронізував `django-app` з Git-репозиторію. Pod у namespace `default` має статус **Healthy**, образ з ECR (`<account-id>.dkr.ecr.eu-north-1.amazonaws.com/project-django-ecr:15`) запущено та готово до роботи.
+
+### Django — застосунок доступний
+
+![Django API](image.png)
+
+Django REST API відповідає за публічним AWS ELB URL. Endpoint `/api/items/` повертає дані з RDS PostgreSQL: `{"items": [{"id": 1, "name": "Item One"}, {"id": 2, "name": "Item Two"}]}`.
+
+### Prometheus — збір метрик
+
+![Prometheus](prometheus.png)
+
+Prometheus (Status → Target health) показує активні ServiceMonitors: `kube-prometheus-stack-apiserver` (2/2 up), `kube-prometheus-stack-coredns` (2/2 up), `kube-prometheus-stack-grafana` (1/1 up). Всі системні компоненти кластера успішно scrape-яться.
+
+### Grafana — візуалізація метрик
+
+![Grafana](grafana.png)
+
+Grafana Metrics Explorer підключений до Prometheus як data source. Відображаються метрики кластера: пам'ять вузлів (`node_memory_MemAvailable_bytes:sum`), стан alerts, метрики API server та CoreDNS.
