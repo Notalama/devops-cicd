@@ -3,7 +3,7 @@ replicaCount: 2
 image:
   repository: 905418284064.dkr.ecr.eu-north-1.amazonaws.com/project-django-ecr
   pullPolicy: IfNotPresent
-  tag: "latest"
+  tag: "10"
 
 service:
   type: LoadBalancer
